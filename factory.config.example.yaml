@@ -1,0 +1,46 @@
+# Copy to ~/factory/factory.config.yaml and edit. Every key below except github.owner has a default.
+
+github:
+  owner: Peter-Nagy
+  # The private "factory-bot" GitHub App (see docs/RUNBOOK.md, step 4)
+  appId: "000000"
+  installationId: "00000000"
+  appPrivateKey: GITHUB_APP_PRIVATE_KEY # secret name in the 1Password Factory vault, or a file path
+  managedTopic: factory-managed
+
+paths:
+  state: ~/factory/state
+  repos: ~/factory/repos
+  worktrees: ~/factory/worktrees
+  logs: ~/factory/logs
+  workerConfig: ~/factory/software-factory/worker-config
+
+governor:
+  weeklyHeadroomPct: 10 # allowed 7-day usage = elapsed share of the week + this
+  sprintHoursBeforeWeeklyReset: 12 # use leftover allowance in the last hours before the weekly reset
+  opusMaxFiveHourPct: 70
+  anyMaxFiveHourPct: 90
+  weeklyHardStopPct: 98
+  smallTaskMaxPct: 5
+  maxParallel: 6
+  unknownUsageMaxParallel: 2
+
+worker:
+  image: factory-worker:current
+  cpus: 4
+  memoryGb: 6
+  claudeTokenEnv: CLAUDE_CODE_OAUTH_TOKEN # also the secret name in the Factory vault
+
+# Per-role overrides (model, effort, maxTurns, timeoutMinutes, maxBudgetUsd)
+roles:
+  implementer:
+    timeoutMinutes: 45
+
+questions:
+  defaultTimeoutHours: 24
+  smallUiTimeoutHours: 4
+
+schedule:
+  tickSeconds: 30
+  timezone: Europe/Budapest
+  digestHourLocal: 8

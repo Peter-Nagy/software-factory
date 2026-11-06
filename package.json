@@ -1,0 +1,24 @@
+{
+  "name": "software-factory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous software factory: Claude Code agents build, review, merge and deploy personal projects on a Mac mini.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning orchestrator/src/main.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test 'orchestrator/test/**/*.test.ts'",
+    "typecheck": "tsc --noEmit -p .",
+    "spikes": "bash spikes/run-all.sh"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.0"
+  }
+}

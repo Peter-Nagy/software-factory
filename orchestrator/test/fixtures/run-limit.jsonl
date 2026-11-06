@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"sess-9","model":"claude-sonnet-5-5"}
+{"type":"assistant","session_id":"sess-9","message":{"content":[{"type":"text","text":"Starting"}]}}
+{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"sess-9","result":"Claude usage limit reached. Your limit will reset at 3pm.","num_turns":4}

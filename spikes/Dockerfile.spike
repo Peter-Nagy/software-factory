@@ -1,0 +1,13 @@
+# Small image for the S0 spikes: same user, entrypoint and CLI as the real worker, without the gate tooling.
+FROM node:24-bookworm-slim
+ARG CLAUDE_CODE_VERSION=latest
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+RUN useradd --create-home --shell /bin/bash worker
+COPY entrypoint.sh /usr/local/bin/factory-entrypoint
+RUN chmod +x /usr/local/bin/factory-entrypoint
+USER worker
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/factory-entrypoint"]
+CMD ["claude", "--version"]

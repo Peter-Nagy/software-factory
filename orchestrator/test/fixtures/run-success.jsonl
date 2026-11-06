@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"sess-123","model":"claude-sonnet-5-5","tools":["Bash","Read","Edit"]}
+{"type":"assistant","session_id":"sess-123","message":{"content":[{"type":"text","text":"Working on it"}]}}
+{"type":"system","subtype":"permission_denied","session_id":"sess-123","tool_name":"Bash"}
+not json at all
+{"type":"system","subtype":"status","session_id":"sess-123","rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1738425600},"seven_day":{"used_percentage":41.2,"resets_at":1738857600}}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"sess-123","result":"Implemented the login page and pushed.","total_cost_usd":0.42,"num_turns":17,"duration_ms":523000,"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git push --force"}}]}

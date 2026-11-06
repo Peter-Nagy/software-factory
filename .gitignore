@@ -1,0 +1,9 @@
+node_modules/
+state/
+spikes/results/*
+!spikes/results/summary.md
+*.log
+.env
+.env.*
+*.pem
+.DS_Store
