@@ -78,6 +78,15 @@ export const FactoryConfigSchema = z.object({
       smallUiTimeoutHours: z.number().positive().default(4),
     })
     .default({}),
+  /** Local web dashboard (bound to this Mac; reach it from elsewhere through `tailscale serve`). */
+  dashboard: z
+    .object({
+      enabled: z.boolean().default(true),
+      port: z.number().int().min(0).max(65535).default(4777), // 0 = any free port (tests)
+      /** Host names the browser may use, besides localhost. Any *.ts.net name (Tailscale) is always allowed. */
+      allowedHosts: z.array(z.string()).default([]),
+    })
+    .default({}),
   /** Discord remote control. Leave out to run without it (notifications go to the log). */
   discord: z
     .object({

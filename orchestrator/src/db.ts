@@ -94,6 +94,26 @@ const MIGRATIONS: string[] = [
      text TEXT NOT NULL,
      state TEXT NOT NULL DEFAULT 'new'
    );`,
+  // v3: plan mode (a conversation with the planner that ends in issues, and for new projects a repo)
+  `CREATE TABLE plans (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     title TEXT NOT NULL,
+     target TEXT NOT NULL,
+     project_id TEXT,
+     state TEXT NOT NULL DEFAULT 'drafting',
+     model TEXT NOT NULL DEFAULT 'opus',
+     session_id TEXT,
+     result TEXT,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   );
+   CREATE TABLE plan_messages (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     plan_id INTEGER NOT NULL REFERENCES plans(id),
+     role TEXT NOT NULL,
+     text TEXT NOT NULL,
+     at INTEGER NOT NULL
+   );`,
 ];
 
 type Row = Record<string, unknown>;

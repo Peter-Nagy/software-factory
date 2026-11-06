@@ -1,9 +1,11 @@
 import { createApp, recoverInterrupted, syncIssues } from './app.ts';
 import { runBuild } from './pipeline.ts';
+import { startDashboard } from './dashboard/server.ts';
 import { Bot } from './discord/bot.ts';
 import { containerIntake } from './discord/intake.ts';
 import { DiscordRest } from './discord/rest.ts';
 import { applyTimeouts } from './questions.ts';
+import { ghRepoCreator } from './repo-create.ts';
 import { killLeftoverContainers } from './runner/container.ts';
 import { REVIEW_COST_PCT, reviewModelGuess, runReviewStage } from './review.ts';
 import { schedule, scheduleReviews } from './scheduler.ts';
@@ -38,6 +40,16 @@ async function main(): Promise<void> {
   }
 
   const recovered = recoverInterrupted(app);
+
+  if (config.dashboard.enabled) {
+    try {
+      const server = await startDashboard(app, { createRepo: ghRepoCreator(config.github.owner, config.github.managedTopic) });
+      process.once('exit', () => server.close());
+      console.log(`Dashboard on http://127.0.0.1:${config.dashboard.port} (login link: factory dashboard-url)`);
+    } catch (e) {
+      console.error(`Dashboard not started: ${(e as Error).message}`);
+    }
+  }
   if (recovered.length) console.log(`Requeued interrupted tasks: ${recovered.join(', ')}`);
 
   const stop = () => {

@@ -96,5 +96,12 @@ export function recoverInterrupted(app: App): string[] {
       recovered.push(t.id);
     }
   }
+  // Plans whose planner run or execution was cut off: let the owner continue (execution resumes where it stopped).
+  for (const r of app.store.db.prepare(`SELECT id, state FROM plans WHERE state IN ('thinking', 'executing')`).all() as { id: number; state: string }[]) {
+    app.store.db.prepare('UPDATE plans SET state = ? WHERE id = ?').run(r.state === 'thinking' ? 'drafting' : 'failed', r.id);
+    app.store.db
+      .prepare('INSERT INTO plan_messages (plan_id, role, text, at) VALUES (?, ?, ?, ?)')
+      .run(r.id, 'system', r.state === 'thinking' ? 'The factory restarted while the planner was working. Send your message again.' : 'The factory restarted during execution. Press Execute again to finish; done steps are skipped.', app.now());
+  }
   return recovered;
 }

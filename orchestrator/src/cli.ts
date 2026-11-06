@@ -1,6 +1,8 @@
 import { parseArgs } from 'node:util';
 import { createApp } from './app.ts';
 import { approveMigration, rejectMigration } from './review.ts';
+import { dashboardToken } from './dashboard/server.ts';
+import { execFileSync } from 'node:child_process';
 import { GitHubError } from './github.ts';
 import type { Project, ProjectKind } from './types.ts';
 
@@ -12,6 +14,8 @@ const HELP = `factory <command>
   usage                  Latest subscription usage reading
   pause <hours>          Start no new runs for <hours>
   resume                 Clear a pause
+  dashboard-url          Print the dashboard login link (keep it private: it logs a browser in)
+  dashboard-reset        Make a new login link; browsers logged in with the old one are logged out
   protect <repo>         (Re)apply branch protection on main: PRs only, factory checks required
   approve <task-id>      Approve a held destructive migration (exactly the change that was flagged)
   reject <task-id>       Reject it; the task is parked
@@ -62,6 +66,23 @@ async function main(): Promise<void> {
       store.upsertProject(project);
       store.setProjectState(project.id, 'active');
       console.log(`Added ${project.owner}/${project.id} (${project.kind}, priority ${project.priority}).${protectedNow ? ' main is protected.' : ''}`);
+      break;
+    }
+    case 'dashboard-reset':
+      store.setSetting('dashboardToken', null);
+    // falls through
+    case 'dashboard-url': {
+      const token = dashboardToken(app);
+      let host = '';
+      try {
+        const st = JSON.parse(execFileSync('tailscale', ['status', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })) as { Self?: { DNSName?: string } };
+        host = (st.Self?.DNSName ?? '').replace(/\.$/, '');
+      } catch {
+        /* tailscale not available */
+      }
+      console.log(`On this Mac:  http://localhost:${config.dashboard.port}/login?t=${token}`);
+      if (host) console.log(`Via Tailscale: https://${host}/login?t=${token}   (after: tailscale serve --bg ${config.dashboard.port})`);
+      if (cmd === 'dashboard-reset') console.log('New link made; restart the orchestrator so it uses it.');
       break;
     }
     case 'protect': {

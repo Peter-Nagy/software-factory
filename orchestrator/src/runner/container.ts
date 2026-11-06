@@ -13,6 +13,8 @@ export interface ContainerSpec {
   sessionsDir?: string;
   /** Mount the checkout read-only (reviewer). */
   readOnlyWork?: boolean;
+  /** Extra read-only mounts: host path -> container path. */
+  extraReadOnlyMounts?: Record<string, string>;
   cpus: number;
   memoryGb: number;
   /** Env var names to pass through. Values come from the spawning process env, never the command line. */
@@ -51,6 +53,7 @@ export function dockerCommandArgs(spec: ContainerSpec, command: string[]): strin
     `${spec.workerConfigDir}:/home/worker/.claude-config:ro`,
   ];
   if (spec.sessionsDir) args.push('-v', `${spec.sessionsDir}:/home/worker/.claude/projects`);
+  for (const [host, container] of Object.entries(spec.extraReadOnlyMounts ?? {})) args.push('-v', `${host}:${container}:ro`);
   args.push('-w', '/work');
   for (const [k, v] of Object.entries({ 'factory.run': spec.name, ...(spec.labels ?? {}) })) {
     args.push('--label', `${k}=${v}`);

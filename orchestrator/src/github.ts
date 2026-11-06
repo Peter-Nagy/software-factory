@@ -116,6 +116,17 @@ export class GitHub {
     ).then((prs) => prs[0] ?? null);
   }
 
+  /** Create labels that don't exist yet (422 = already there). */
+  async ensureLabels(owner: string, repo: string, labels: { name: string; color: string }[]): Promise<void> {
+    for (const l of labels) {
+      try {
+        await this.request('POST', `/repos/${owner}/${repo}/labels`, l);
+      } catch (e) {
+        if (!(e instanceof GitHubError && e.status === 422)) throw e;
+      }
+    }
+  }
+
   createIssue(owner: string, repo: string, p: { title: string; body: string; labels: string[] }) {
     return this.request<{ number: number; html_url: string }>('POST', `/repos/${owner}/${repo}/issues`, p);
   }
