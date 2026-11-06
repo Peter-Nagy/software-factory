@@ -98,17 +98,24 @@ export function runInContainer(spec: ContainerSpec, claudeArgs: string[], opts: 
       parser.push(line);
       opts.onLine?.(line);
     });
-    createInterface({ input: child.stderr }).on('line', (line) => log.write(`[stderr] ${line}\n`));
+    let stderrTail = '';
+    createInterface({ input: child.stderr }).on('line', (line) => {
+      log.write(`[stderr] ${line}\n`);
+      stderrTail = `${stderrTail}${line}\n`.slice(-2000);
+    });
 
     child.on('error', (err) => {
       clearTimeout(timer);
       log.end();
       reject(err);
     });
-    child.on('close', () => {
+    child.on('close', (code) => {
       clearTimeout(timer);
       log.end();
-      resolve(parser.finish(timedOut));
+      const result = parser.finish(timedOut);
+      // The agent never reported a result: surface why (e.g. the container failed to start).
+      if (!result.completed && !result.resultText) result.resultText = `exit ${code}: ${stderrTail.trim() || 'no output'}`;
+      resolve(result);
     });
   });
 }

@@ -34,7 +34,9 @@ RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" pnpm@10 \
     && npx -y playwright@1 install --with-deps chromium \
     && chmod -R a+rx /ms-playwright
 
-RUN useradd --create-home --shell /bin/bash worker
+RUN useradd --create-home --shell /bin/bash worker \
+    # Pre-create ~/.claude as the worker: a volume mounted below it would otherwise make Docker create it as root.
+    && mkdir -p /home/worker/.claude/projects && chown -R worker:worker /home/worker/.claude
 COPY entrypoint.sh /usr/local/bin/factory-entrypoint
 RUN chmod +x /usr/local/bin/factory-entrypoint
 
