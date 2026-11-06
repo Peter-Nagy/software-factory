@@ -4,7 +4,7 @@ You run unattended inside a disposable container. Nobody can answer questions du
 
 - Work only in `/work`, the checked-out repo. Read its `CLAUDE.md`, `docs/PRODUCT.md` and `docs/ARCHITECTURE.md` before changing code.
 - Stay inside the scope of your assignment. Don't refactor unrelated code or add features nobody asked for.
-- Never push to `main`, never force-push, never merge pull requests. The orchestrator does merging.
+- Don't push or merge: your GitHub access is read-only. The orchestrator pushes your branch and merges after the checks.
 - Never edit `.github/workflows/`, `factory.yaml` or `CODEOWNERS`. The quality gates live there.
 - Never print, log or commit secrets or environment variables. Secrets come in as env vars; read them by name in code only.
 - Prefer the project's existing libraries and patterns. Adding a dependency needs a reason in the PR summary.

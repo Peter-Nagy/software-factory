@@ -44,7 +44,8 @@ function setup() {
     config,
     store,
     secrets: new Secrets({ reader: async (ref) => `value-of-${ref}` }),
-    repoAccess: async () => ({ gh: fakeGh, token: '' }),
+    // Tokens tell the two apart: the orchestrator's can write, the agent's is read-only.
+    repoAccess: async (_p, perms) => ({ gh: fakeGh, token: perms?.contents === 'write' ? 'orchestrator-token' : 'agent-token' }),
     remoteUrl: () => origin,
     now: () => Math.floor(Date.now() / 1000),
     notify: async (_k, t) => void notes.push(t),
@@ -151,4 +152,11 @@ test('pipeline: a usage-limit checkpoint resumes the same attempt and session', 
   assert.equal(t.state, 'in_review');
   assert.equal(t.attempt, 1);
   assert.match(readFileSync(join(r.root, 'argsseen'), 'utf8'), /--resume sess-fake/);
+});
+
+test('pipeline: the agent only ever gets the read-only token; the host pushes its commits', async () => {
+  const r = await run('success', 16);
+  assert.equal(readFileSync(join(r.root, 'ghtoken'), 'utf8'), 'agent-token');
+  assert.equal(r.task.state, 'in_review');
+  assert.equal(r.g(r.origin, 'log', '-1', '--format=%s', 'claude/16-issue-16'), 'feat: fake work');
 });

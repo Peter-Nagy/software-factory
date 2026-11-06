@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { buildClaudeArgs } from './claude.ts';
 import { parseProjectConfig, type FactoryConfig, type ProjectConfig } from './config.ts';
 import type { Store } from './db.ts';
-import type { GitHub, RepoPermissions } from './github.ts';
+import { ORCHESTRATOR_PERMISSIONS, type GitHub, type RepoPermissions } from './github.ts';
 import { nextStep } from './retry.ts';
 import { promptPath, roleConfig } from './roles.ts';
 import { runInContainer } from './runner/container.ts';
@@ -42,7 +42,7 @@ export function implementerPrompt(task: Task, failureSummary: string | null): st
   const lines = [
     `Implement GitHub issue #${task.issueNumber}: "${task.title}".`,
     `Read it first with: gh issue view ${task.issueNumber} --comments`,
-    `You are on branch ${task.branch}. Commit in small steps and push with: git push -u origin HEAD`,
+    `You are on branch ${task.branch}. Commit in small steps. Don't push: you have read-only GitHub access, and the factory pushes your commits when you finish.`,
     `Finish by writing ${FACTORY_DIR}/summary.md (PR description: what changed, how it was tested, acceptance criteria checklist).`,
   ];
   if (failureSummary) {
@@ -54,7 +54,7 @@ export function implementerPrompt(task: Task, failureSummary: string | null): st
 export function fixPrompt(failure: string): string {
   return [
     'The checks or the review on your pull request failed. Fix every blocking item below, run the tests again,',
-    `commit, push, and update ${FACTORY_DIR}/summary.md.`,
+    `commit (don't push; the factory does), and update ${FACTORY_DIR}/summary.md.`,
     '',
     failure.slice(0, 6000),
   ].join('\n');
@@ -62,7 +62,7 @@ export function fixPrompt(failure: string): string {
 
 export const RESUME_PROMPT = [
   'Your previous run was interrupted (usage limit or restart). Continue the same task where you left off.',
-  'Check `git status` and `git log` first: uncommitted changes from before the interruption are gone, pushed commits are there.',
+  'Check `git status` and `git log` first: uncommitted changes from before the interruption are gone, committed work is still there.',
   `Finish as instructed earlier, including ${FACTORY_DIR}/summary.md.`,
 ].join('\n');
 
@@ -86,7 +86,7 @@ export async function loadProjectConfig(dir: string, base = 'main'): Promise<Pro
 
 /**
  * Run the implementer for one task according to its pending mode (build / fix / resume), then route the outcome:
- * runner error -> backoff; usage limit -> checkpoint; question -> blocked; pushed work -> PR + in_review;
+ * runner error -> backoff; usage limit -> checkpoint; question -> blocked; committed work -> pushed + PR + in_review;
  * any other failure -> retry ladder.
  */
 export async function runBuild(ctx: PipelineContext, project: Project, task: Task, model: Model): Promise<void> {
@@ -105,8 +105,12 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
     notBefore: null,
   });
 
-  const { gh, token } = await ctx.repoAccess(project);
-  const clean = (text: string) => redact(text, token);
+  // Two tokens: the agent's is read-only (it can't push anywhere, whatever it runs); the orchestrator's pushes
+  // exactly this task's branch from the host and opens the PR. GitHub branch protection needs a paid plan on
+  // private repos, so read-only agent tokens are what keeps main safe.
+  const { token: agentToken } = await ctx.repoAccess(project);
+  const { gh, token } = await ctx.repoAccess(project, ORCHESTRATOR_PERMISSIONS);
+  const clean = (text: string) => redact(redact(text, token), agentToken);
   const dir = checkoutPath(config.paths.worktrees, project.id, `${task.issueNumber}`);
   const remoteUrl = ctx.remoteUrl?.(project) ?? `https://github.com/${project.owner}/${project.id}.git`;
   await prepareCheckout({ remoteUrl, dir, branch, token });
@@ -118,7 +122,7 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
   const projectConfig = await loadProjectConfig(dir);
   const env = {
     [config.worker.claudeTokenEnv]: await ctx.secrets.get(config.worker.claudeTokenEnv),
-    GH_TOKEN: token,
+    GH_TOKEN: agentToken,
     ...(await ctx.secrets.getMany(projectConfig.secrets)),
   };
 
@@ -212,9 +216,20 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
     return;
   }
 
-  // 3. Work pushed: open (or reuse) the PR and hand over to the gates.
-  const remoteHead = await gitRemote(dir, token, 'ls-remote', 'origin', `refs/heads/${branch}`).catch(() => '');
-  if (result.ok && remoteHead) {
+  // 3. Work committed: push the task branch (never anything else, never forced), open or reuse the PR, hand over to the gates.
+  let pushed = false;
+  if (result.ok) {
+    try {
+      await pushLocalWork();
+      const remoteHead = await gitRemote(dir, token, 'ls-remote', 'origin', `refs/heads/${branch}`);
+      pushed = remoteHead !== '' && Number(await git(dir, 'rev-list', '--count', `origin/main..${branch}`)) > 0;
+    } catch (e) {
+      // e.g. the agent rewrote already-pushed history: the non-forced push is refused
+      await handleFailure(ctx, task.id, sessionId, `Pushing your branch failed: ${clean((e as Error).message)}\nDon't rewrite commits that were already pushed (no rebase, amend or reset of earlier work); add new commits instead.`);
+      return;
+    }
+  }
+  if (result.ok && pushed) {
     const summaryPath = join(factoryDir, 'summary.md');
     const summary = existsSync(summaryPath) ? readFileSync(summaryPath, 'utf8') : result.resultText;
     const body = `${clean(summary)}\n\nCloses #${task.issueNumber}\n\n_Built by the software factory (${model}, attempt ${attempt})._`;
@@ -225,7 +240,7 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
   }
 
   // 4. A real failure: follow the retry ladder.
-  const why = result.timedOut ? 'Run timed out.' : clean(result.resultText || 'Run ended without pushing any work.');
+  const why = result.timedOut ? 'Run timed out.' : clean(result.resultText || 'Run ended without committing any work.');
   await handleFailure(ctx, task.id, sessionId, why);
 }
 

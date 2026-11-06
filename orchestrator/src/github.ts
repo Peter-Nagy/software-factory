@@ -17,11 +17,11 @@ export type RepoPermissions = Partial<
   Record<'contents' | 'pull_requests' | 'issues' | 'checks' | 'statuses' | 'metadata' | 'workflows' | 'administration', 'read' | 'write'>
 >;
 
-/** Permissions a worker container gets: enough to push its branch and open/update a PR. No admin, no workflows. */
+/** Permissions an agent container gets: read only. The orchestrator pushes the agent's commits from the host. */
 export const WORKER_PERMISSIONS: RepoPermissions = {
-  contents: 'write',
-  pull_requests: 'write',
-  issues: 'write',
+  contents: 'read',
+  pull_requests: 'read',
+  issues: 'read',
   checks: 'read',
   statuses: 'read',
   metadata: 'read',

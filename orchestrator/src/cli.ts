@@ -1,7 +1,8 @@
 import { parseArgs } from 'node:util';
 import { createApp } from './app.ts';
 import { approveMigration, rejectMigration } from './review.ts';
-import type { ProjectKind } from './types.ts';
+import { GitHubError } from './github.ts';
+import type { Project, ProjectKind } from './types.ts';
 
 const HELP = `factory <command>
 
@@ -17,6 +18,24 @@ const HELP = `factory <command>
   requeue <task-id>      Put a parked or blocked task back in the queue (e.g. "habit-tracker#12")
   cancel <task-id>       Cancel a task
 `;
+
+/**
+ * Branch protection is an extra layer: agents can't push anyway (read-only tokens). GitHub offers it on private
+ * repos only with a paid plan, so a refusal is reported and the project still works.
+ */
+async function tryProtect(app: Awaited<ReturnType<typeof createApp>>, project: Project): Promise<boolean> {
+  const { gh } = await app.repoClient(project, { administration: 'write', metadata: 'read' });
+  try {
+    await gh.protectBranch(project.owner, project.id);
+    return true;
+  } catch (e) {
+    if (e instanceof GitHubError && e.status === 403) {
+      console.log('Branch protection not available (private repos need GitHub Pro). Agents have read-only tokens, so main is still only changed by the factory\'s own merges.');
+      return false;
+    }
+    throw e;
+  }
+}
 
 async function main(): Promise<void> {
   const { positionals, values } = parseArgs({
@@ -39,19 +58,16 @@ async function main(): Promise<void> {
       if (!topics.includes(config.github.managedTopic)) {
         throw new Error(`${project.owner}/${project.id} lacks the "${config.github.managedTopic}" topic; the factory only touches repos that carry it.`);
       }
-      const { gh: admin } = await app.repoClient(project, { administration: 'write', metadata: 'read' });
-      await admin.protectBranch(project.owner, project.id);
+      const protectedNow = await tryProtect(app, project);
       store.upsertProject(project);
       store.setProjectState(project.id, 'active');
-      console.log(`Added ${project.owner}/${project.id} (${project.kind}, priority ${project.priority}); main is protected.`);
+      console.log(`Added ${project.owner}/${project.id} (${project.kind}, priority ${project.priority}).${protectedNow ? ' main is protected.' : ''}`);
       break;
     }
     case 'protect': {
       if (!arg) throw new Error('Usage: protect <repo>');
       const project = store.projects().find((p) => p.id === arg) ?? { id: arg, owner: config.github.owner, kind: 'web-app' as const, state: 'active' as const, priority: 3, createdAt: now };
-      const { gh: admin } = await app.repoClient(project, { administration: 'write', metadata: 'read' });
-      await admin.protectBranch(project.owner, project.id);
-      console.log(`Protected ${project.owner}/${project.id} main.`);
+      if (await tryProtect(app, project)) console.log(`Protected ${project.owner}/${project.id} main.`);
       break;
     }
     case 'approve':

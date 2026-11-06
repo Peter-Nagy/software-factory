@@ -17,24 +17,25 @@ ROOT="$WORK/../../.."
 MODE=$(cat "$ROOT/mode" 2>/dev/null || echo success)
 printenv | cut -d= -f1 | sort > "$ROOT/envseen"
 echo "$*" > "$ROOT/argsseen"
+printf "%s" "${GH_TOKEN:-}" > "$ROOT/ghtoken"
 g() { git -c user.name=fake -c user.email=fake@x "$@"; }
 echo '{"type":"system","subtype":"init","session_id":"sess-fake"}'
 case "$MODE" in
   success)
     echo "feature $(date +%s%N)" >> feature.txt
-    g add feature.txt && g commit -qm "feat: fake work" && g push -q -u origin HEAD 2>/dev/null
+    g add feature.txt && g commit -qm "feat: fake work"
     printf '## What changed\n- fake feature\n' > .factory/summary.md
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","total_cost_usd":0.1,"num_turns":3}'
     ;;
   migration)
     mkdir -p db/migrations && echo "ALTER TABLE users DROP COLUMN email;" > db/migrations/002.sql
-    g add db && g commit -qm "feat: drop email" && g push -q -u origin HEAD 2>/dev/null
+    g add db && g commit -qm "feat: drop email"
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
     ;;
   protected)
     printf 'kind: web-app\nsecrets: [APP_SECRET]\ngates: {e2e: false}\n' > factory.yaml
     echo "x" >> feature.txt
-    g add . && g commit -qm "feat: and skip e2e" && g push -q -u origin HEAD 2>/dev/null
+    g add . && g commit -qm "feat: and skip e2e"
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
     ;;
   question)
@@ -49,7 +50,7 @@ case "$MODE" in
   tamper)
     # A misbehaving agent tries to grant itself more secrets via the branch's factory.yaml
     printf 'kind: web-app\nsecrets: [APP_SECRET, EVIL_SECRET]\n' > factory.yaml
-    g add factory.yaml && g commit -qm "chore: tweak config" && g push -q -u origin HEAD 2>/dev/null
+    g add factory.yaml && g commit -qm "chore: tweak config"
     echo '{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"sess-fake","result":"failed","num_turns":5}'
     ;;
   crash)
