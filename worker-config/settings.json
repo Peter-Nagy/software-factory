@@ -22,11 +22,8 @@
       "Bash(printenv*)",
       "Bash(env)",
       "Edit(/.github/workflows/**)",
-      "Write(/.github/workflows/**)",
       "Edit(/factory.yaml)",
-      "Write(/factory.yaml)",
-      "Edit(/.github/CODEOWNERS)",
-      "Write(/.github/CODEOWNERS)"
+      "Edit(/.github/CODEOWNERS)"
     ]
   },
   "includeCoAuthoredBy": false,
