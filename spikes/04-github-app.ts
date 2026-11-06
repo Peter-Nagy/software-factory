@@ -1,8 +1,10 @@
 // S0-4: can the factory-bot GitHub App mint a token that reaches exactly one repo?
-// Env: GH_APP_ID, GH_APP_KEY_FILE, GH_INSTALLATION_ID, GH_OWNER, GH_REPO (a factory repo), GH_OTHER_REPO (any other repo you own)
+// Env: GH_APP_ID, GH_INSTALLATION_ID, GH_OWNER, GH_REPO (a repo to reach), GH_OTHER_REPO (any other repo you own),
+//      and either GH_APP_KEY_FILE or OP_SERVICE_ACCOUNT_TOKEN (key read from the GITHUB_APP_PRIVATE_KEY item in the Factory vault)
 import { appendFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appJwt, GitHub, WORKER_PERMISSIONS } from '../orchestrator/src/github.ts';
+import { Secrets } from '../orchestrator/src/secrets.ts';
 
 const summary = join(import.meta.dirname, 'results', 'summary.md');
 const NAME = 'S0-4 GitHub App scoped token';
@@ -12,15 +14,17 @@ const report = (status: string, detail: string) => {
 };
 
 const env = (k: string) => process.env[k] ?? '';
-const required = ['GH_APP_ID', 'GH_APP_KEY_FILE', 'GH_INSTALLATION_ID', 'GH_OWNER', 'GH_REPO', 'GH_OTHER_REPO'];
+const required = ['GH_APP_ID', 'GH_INSTALLATION_ID', 'GH_OWNER', 'GH_REPO', 'GH_OTHER_REPO'];
 const missing = required.filter((k) => !env(k));
+if (!env('GH_APP_KEY_FILE') && !env('OP_SERVICE_ACCOUNT_TOKEN')) missing.push('GH_APP_KEY_FILE or OP_SERVICE_ACCOUNT_TOKEN');
 if (missing.length) {
   report('SKIP', `missing env: ${missing.join(' ')}`);
   process.exit(0);
 }
 
 try {
-  const jwt = appJwt(env('GH_APP_ID'), readFileSync(env('GH_APP_KEY_FILE'), 'utf8'));
+  const key = env('GH_APP_KEY_FILE') ? readFileSync(env('GH_APP_KEY_FILE'), 'utf8') : await new Secrets().get('GITHUB_APP_PRIVATE_KEY');
+  const jwt = appJwt(env('GH_APP_ID'), key);
   const { token, expiresAt } = await GitHub.installationToken({
     appJwt: jwt,
     installationId: env('GH_INSTALLATION_ID'),

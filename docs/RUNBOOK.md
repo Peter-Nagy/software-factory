@@ -16,11 +16,13 @@ How to install, operate and recover the factory on the Mac mini. The design live
 3. **Run the spikes:** `bash spikes/run-all.sh` (see `spikes/README.md`). Send the summary back before go-live.
 4. **GitHub App "factory-bot"** (github.com, Settings, Developer settings, GitHub Apps, New):
    - Homepage: any URL. Webhook: off.
-   - Repository permissions: Contents RW, Pull requests RW, Issues RW, Checks R, Commit statuses R, Metadata R, Administration RW
-     (Administration is used only by the orchestrator, for branch protection; workers get tokens without it).
+   - Repository permissions: Contents RW, Pull requests RW, Issues RW, Checks R, Commit statuses R, Metadata R,
+     Administration RW, Workflows RW. Administration (branch protection) and Workflows (CI files in new projects) are used
+     only by the orchestrator; worker tokens leave them out, so GitHub itself rejects agent pushes to `.github/workflows/`.
    - Install it on your account with **All repositories**. Per-task tokens are cut down to one repo, and the
      orchestrator refuses repos without the `factory-managed` topic.
-   - Note the App ID and the installation ID (from the installation URL), and generate a private key.
+   - Note the App ID and the installation ID (from the installation URL), and generate a private key. Store the key as
+     `GITHUB_APP_PRIVATE_KEY` in the Factory vault and delete the downloaded file.
 5. **1Password:** create a vault `Factory`. Add items (type API Credential, value in the `credential` field):
    `CLAUDE_CODE_OAUTH_TOKEN`, `GITHUB_APP_PRIVATE_KEY` (paste the .pem contents), plus per-project secrets later.
    Create a service account with read access to `Factory` only, then store its token in the keychain:
