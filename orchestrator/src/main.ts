@@ -1,5 +1,6 @@
 import { createApp, recoverInterrupted, syncIssues } from './app.ts';
 import { runBuild } from './pipeline.ts';
+import { killLeftoverContainers } from './runner/container.ts';
 import { schedule } from './scheduler.ts';
 
 const ISSUE_SYNC_EVERY_S = 300;
@@ -17,7 +18,10 @@ async function main(): Promise<void> {
   const stop = () => {
     stopping = true;
     console.log(`Stopping: waiting for ${running.size} running task(s). Send SIGTERM again to exit now.`);
-    process.once('SIGTERM', () => process.exit(143));
+    process.once('SIGTERM', () => {
+      killLeftoverContainers(); // don't leave agents running without an orchestrator
+      process.exit(143);
+    });
   };
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
@@ -36,6 +40,7 @@ async function main(): Promise<void> {
       now,
       tasks: store.openTasks(),
       runningTaskIds: new Set(running.keys()),
+      cancelledTaskIds: store.cancelledTaskIds(),
       activeProjects: new Set(projects.filter((p) => p.state === 'active').map((p) => p.id)),
       usage: store.latestUsage(),
       pausedUntil: pausedUntilRaw ? Number(pausedUntilRaw) : null,
@@ -44,17 +49,20 @@ async function main(): Promise<void> {
 
     for (const { task, model } of out.picks) {
       const project = projects.find((p) => p.id === task.projectId)!;
-      const mode = task.sessionId && task.lastFailure ? 'fix' : 'build';
-      console.log(`Starting ${mode} for ${task.id} on ${model}`);
-      const p = runBuild(app, project, task, model, mode, task.lastFailure)
+      console.log(`Starting ${task.pendingMode} for ${task.id} on ${model}`);
+      const p = runBuild(app, project, task, model)
         .catch((e: Error) => {
           console.error(`Run for ${task.id} crashed: ${e.stack ?? e.message}`);
-          store.event('run.crash', task.id, { error: e.message });
-          // Park instead of retrying blindly: an infrastructure error would otherwise repeat every tick.
-          const current = store.task(task.id);
-          if (current && ['queued', 'building', 'fixing'].includes(current.state)) {
-            store.transition(task.id, 'parked', { lastFailure: `Orchestrator error: ${e.message}` });
-            void app.notify('alert', `Parked ${task.id} after an orchestrator error: ${e.message}`);
+          try {
+            store.event('run.crash', task.id, { error: e.message });
+            // Park instead of retrying blindly: an infrastructure error would otherwise repeat every tick.
+            const current = store.task(task.id);
+            if (current && ['queued', 'building', 'fixing'].includes(current.state)) {
+              store.transition(task.id, 'parked', { lastFailure: `Orchestrator error: ${e.message}` });
+              void app.notify('alert', `Parked ${task.id} after an orchestrator error: ${e.message}`);
+            }
+          } catch (inner) {
+            console.error(`Could not park ${task.id}: ${(inner as Error).message}`);
           }
         })
         .finally(() => running.delete(task.id));

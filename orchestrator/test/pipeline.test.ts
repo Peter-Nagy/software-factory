@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,7 +56,7 @@ async function run(mode: string, issue: number, s = setup()) {
   process.env.FACTORY_DOCKER_BIN = fakeDocker;
   writeFileSync(join(s.root, 'mode'), mode);
   s.store.upsertTask(taskFromIssue('app', 3, { number: issue, title: `Issue ${issue}`, body: null, labels: [] }));
-  await runBuild(s.ctx, s.project, s.store.task(`app#${issue}`)!, 'sonnet', 'build', null);
+  await runBuild(s.ctx, s.project, s.store.task(`app#${issue}`)!, 'sonnet');
   return { ...s, task: s.store.task(`app#${issue}`)! };
 }
 
@@ -98,11 +98,57 @@ test('pipeline: failure follows the retry ladder (fix on the same session first)
 
 test('pipeline: a queued fix resumes the session and lands back in review', async () => {
   const r = await run('fail', 11);
+  assert.equal(r.task.pendingMode, 'fix');
   writeFileSync(join(r.root, 'mode'), 'success');
-  await runBuild(r.ctx, r.project, r.task, 'sonnet', 'fix', r.task.lastFailure);
+  await runBuild(r.ctx, r.project, r.task, 'sonnet');
   const t = r.store.task('app#11')!;
   assert.equal(t.state, 'in_review');
   assert.equal(t.fixRounds, 1);
   assert.equal(t.attempt, 1);
   assert.equal(t.lastFailure, null);
+  assert.match(readFileSync(join(r.root, 'argsseen'), 'utf8'), /--resume sess-fake/);
+});
+
+test('pipeline: an answered question does not block the next run again', async () => {
+  const r = await run('question', 12);
+  assert.equal(r.task.state, 'blocked');
+  r.store.transition('app#12', 'queued');
+  writeFileSync(join(r.root, 'mode'), 'success');
+  await runBuild(r.ctx, r.project, r.store.task('app#12')!, 'sonnet');
+  assert.equal(r.store.task('app#12')!.state, 'in_review');
+});
+
+test('pipeline: secrets come from factory.yaml on main, never from the task branch', async () => {
+  const r = await run('tamper', 13);
+  assert.equal(r.task.state, 'queued');
+  writeFileSync(join(r.root, 'mode'), 'success');
+  await runBuild(r.ctx, r.project, r.store.task('app#13')!, 'sonnet');
+  const seen = readFileSync(join(r.root, 'envseen'), 'utf8');
+  assert.match(seen, /APP_SECRET/);
+  assert.doesNotMatch(seen, /EVIL_SECRET/);
+});
+
+test('pipeline: runner errors back off without consuming the retry ladder, then park', async () => {
+  const r = await run('crash', 14);
+  assert.equal(r.task.state, 'queued');
+  assert.equal(r.task.pendingMode, 'resume');
+  assert.equal(r.task.attempt, 1);
+  assert.equal(r.task.fixRounds, 0);
+  assert.ok(r.task.notBefore! > r.ctx.now());
+  for (let i = 0; i < 4; i++) await runBuild(r.ctx, r.project, r.store.task('app#14')!, 'sonnet');
+  const t = r.store.task('app#14')!;
+  assert.equal(t.state, 'parked');
+  assert.equal(t.attempt, 1);
+  assert.match(t.lastFailure!, /Interrupted 5 times/);
+});
+
+test('pipeline: a usage-limit checkpoint resumes the same attempt and session', async () => {
+  const r = await run('limit', 15);
+  assert.equal(r.task.pendingMode, 'resume');
+  writeFileSync(join(r.root, 'mode'), 'success');
+  await runBuild(r.ctx, r.project, r.task, 'sonnet');
+  const t = r.store.task('app#15')!;
+  assert.equal(t.state, 'in_review');
+  assert.equal(t.attempt, 1);
+  assert.match(readFileSync(join(r.root, 'argsseen'), 'utf8'), /--resume sess-fake/);
 });

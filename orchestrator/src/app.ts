@@ -5,6 +5,7 @@ import { Store } from './db.ts';
 import { appJwt, GitHub, WORKER_PERMISSIONS, type RepoPermissions } from './github.ts';
 import { taskFromIssue } from './issues.ts';
 import type { PipelineContext } from './pipeline.ts';
+import { killLeftoverContainers } from './runner/container.ts';
 import { Secrets } from './secrets.ts';
 import type { Project } from './types.ts';
 
@@ -75,12 +76,19 @@ export async function syncIssues(app: App): Promise<number> {
   return count;
 }
 
-/** After a crash or reboot no container is running: put interrupted runs back in the queue, keeping their session. */
+/**
+ * On startup: remove containers a previous process left running (so two agents never share a checkout),
+ * then put interrupted runs back in the queue. They continue their attempt and session; nothing is charged to the ladder.
+ */
 export function recoverInterrupted(app: App): string[] {
+  killLeftoverContainers();
   const recovered: string[] = [];
   for (const t of app.store.openTasks()) {
     if (t.state === 'building' || t.state === 'fixing') {
-      app.store.transition(t.id, 'queued');
+      app.store.transition(t.id, 'queued', {
+        pendingMode: 'resume',
+        fixRounds: t.state === 'fixing' ? Math.max(t.fixRounds - 1, 0) : t.fixRounds,
+      });
       recovered.push(t.id);
     }
   }

@@ -12,7 +12,7 @@ turn ideas and GitHub issues into tested, reviewed and deployed apps while you'r
 | Milestone | State |
 | --- | --- |
 | S0 spikes | Written; run on the Mac |
-| M1 core: config, SQLite state, governor, scheduler, retry ladder, container runner, issue to PR | Built and unit-tested; untested end to end |
+| M1 core: config, SQLite state, governor, scheduler, retry ladder, container runner, issue to PR | Built; unit and integration tests with a fake Docker; not yet run against real GitHub |
 | M2 gates and merge: self-hosted runner, reviewer, auto-merge | Next |
 | M3 governor live: usage probe, own-use detection | After the spike 2 results |
 | M4 Discord · M5 planning · M6 deploy · M7 iOS · M8 maintenance · M9 dashboard · M10 self-improvement · M11 hardening | Planned |

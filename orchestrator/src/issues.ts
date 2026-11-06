@@ -47,6 +47,9 @@ export function taskFromIssue(projectId: string, projectPriority: number, issue:
     branch: null,
     prNumber: null,
     splitOnFail: labels.includes('split-on-fail'),
+    pendingMode: 'build',
+    interruptions: 0,
+    notBefore: null,
     estimatedCostPct: risk === 'high' ? estimatedCostPct * 2 : estimatedCostPct,
     lastFailure: null,
   };

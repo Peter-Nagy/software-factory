@@ -27,6 +27,9 @@ const MIGRATIONS: string[] = [
      branch TEXT,
      pr_number INTEGER,
      split_on_fail INTEGER NOT NULL DEFAULT 0,
+     pending_mode TEXT NOT NULL DEFAULT 'build',
+     interruptions INTEGER NOT NULL DEFAULT 0,
+     not_before INTEGER,
      estimated_cost_pct REAL NOT NULL DEFAULT 5,
      last_failure TEXT,
      created_at INTEGER NOT NULL,
@@ -101,6 +104,9 @@ function rowToTask(r: Row): Task {
     branch: (r.branch as string | null) ?? null,
     prNumber: r.pr_number === null ? null : Number(r.pr_number),
     splitOnFail: Number(r.split_on_fail) === 1,
+    pendingMode: r.pending_mode as Task['pendingMode'],
+    interruptions: Number(r.interruptions),
+    notBefore: r.not_before === null ? null : Number(r.not_before),
     estimatedCostPct: Number(r.estimated_cost_pct),
     lastFailure: (r.last_failure as string | null) ?? null,
     createdAt: Number(r.created_at),
@@ -109,6 +115,10 @@ function rowToTask(r: Row): Task {
 }
 
 const nowS = () => Math.floor(Date.now() / 1000);
+
+export type TaskPatch = Partial<
+  Pick<Task, 'attempt' | 'fixRounds' | 'sessionId' | 'branch' | 'prNumber' | 'lastFailure' | 'pendingMode' | 'interruptions' | 'notBefore'>
+>;
 
 export class Store {
   readonly db: DatabaseSync;
@@ -174,16 +184,17 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO tasks (id, project_id, issue_number, title, state, priority, risk, area, depends_on, attempt, fix_rounds,
-           session_id, branch, pr_number, split_on_fail, estimated_cost_pct, last_failure, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           session_id, branch, pr_number, split_on_fail, pending_mode, interruptions, not_before, estimated_cost_pct,
+           last_failure, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET title = excluded.title, priority = excluded.priority, risk = excluded.risk,
            area = excluded.area, depends_on = excluded.depends_on, split_on_fail = excluded.split_on_fail,
            estimated_cost_pct = excluded.estimated_cost_pct, updated_at = excluded.updated_at`,
       )
       .run(
         t.id, t.projectId, t.issueNumber, t.title, t.state, t.priority, t.risk, t.area, JSON.stringify(t.dependsOn),
-        t.attempt, t.fixRounds, t.sessionId, t.branch, t.prNumber, t.splitOnFail ? 1 : 0, t.estimatedCostPct,
-        t.lastFailure, ts, ts,
+        t.attempt, t.fixRounds, t.sessionId, t.branch, t.prNumber, t.splitOnFail ? 1 : 0, t.pendingMode, t.interruptions,
+        t.notBefore, t.estimatedCostPct, t.lastFailure, ts, ts,
       );
   }
 
@@ -196,20 +207,32 @@ export class Store {
     return (this.db.prepare(`SELECT * FROM tasks WHERE state NOT IN ('done', 'cancelled')`).all() as Row[]).map(rowToTask);
   }
 
+  cancelledTaskIds(): Set<string> {
+    return new Set((this.db.prepare(`SELECT id FROM tasks WHERE state = 'cancelled'`).all() as Row[]).map((r) => String(r.id)));
+  }
+
   /** Move a task to a new state (validated) and optionally update fields in the same statement. */
-  transition(id: string, to: TaskState, patch: Partial<Pick<Task, 'attempt' | 'fixRounds' | 'sessionId' | 'branch' | 'prNumber' | 'lastFailure'>> = {}): Task {
+  transition(id: string, to: TaskState, patch: TaskPatch = {}): Task {
     const current = this.task(id);
     if (!current) throw new Error(`Unknown task ${id}`);
     assertTransition(current.state, to);
     const next: Task = { ...current, ...patch, state: to, updatedAt: nowS() };
-    this.db
+    const res = this.db
       .prepare(
-        `UPDATE tasks SET state = ?, attempt = ?, fix_rounds = ?, session_id = ?, branch = ?, pr_number = ?, last_failure = ?, updated_at = ?
+        `UPDATE tasks SET state = ?, attempt = ?, fix_rounds = ?, session_id = ?, branch = ?, pr_number = ?, last_failure = ?,
+           pending_mode = ?, interruptions = ?, not_before = ?, updated_at = ?
          WHERE id = ? AND state = ?`,
       )
-      .run(next.state, next.attempt, next.fixRounds, next.sessionId, next.branch, next.prNumber, next.lastFailure, next.updatedAt, id, current.state);
+      .run(next.state, next.attempt, next.fixRounds, next.sessionId, next.branch, next.prNumber, next.lastFailure,
+        next.pendingMode, next.interruptions, next.notBefore, next.updatedAt, id, current.state);
+    if (Number(res.changes) === 0) throw new Error(`Task ${id} changed state concurrently; transition to ${to} not applied`);
     this.event('task.transition', id, { from: current.state, to });
     return next;
+  }
+
+  /** Record the session id as soon as a run reports it, so a crash mid-run can still resume the session. */
+  setTaskSession(id: string, sessionId: string): void {
+    this.db.prepare('UPDATE tasks SET session_id = ? WHERE id = ?').run(sessionId, id);
   }
 
   // --- runs & usage ---

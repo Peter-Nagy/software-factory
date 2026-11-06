@@ -8,6 +8,7 @@ export interface SchedulerInput {
   now: number;
   tasks: Task[]; // all non-terminal tasks
   runningTaskIds: Set<string>; // tasks with an agent container running right now
+  cancelledTaskIds?: Set<string>; // dependents of these never start on their own
   activeProjects: Set<string>; // projects in state 'active'
   usage: UsageSnapshot | null;
   pausedUntil: number | null;
@@ -28,11 +29,11 @@ export interface SchedulerOutput {
 
 /**
  * Model for the task's next run. `attempt` counts attempts started so far.
- * A task with a session continues that attempt (fix or checkpoint resume); otherwise a fresh attempt starts.
+ * A fix or resume continues the current attempt; a build starts the next one.
  */
 export function modelForNextRun(task: Task): Model {
   const ladder = attemptLadder(task.risk);
-  const index = task.sessionId ? task.attempt - 1 : task.attempt;
+  const index = task.pendingMode === 'build' ? task.attempt : task.attempt - 1;
   return ladder[Math.min(Math.max(index, 0), ladder.length - 1)]!;
 }
 
@@ -49,9 +50,15 @@ function areaKey(t: Task): string | null {
  */
 export function schedule(cfg: GovernorConfig, input: SchedulerInput): SchedulerOutput {
   const byId = new Map(input.tasks.map((t) => [t.id, t]));
-  // Areas are busy from the first build until merge, so two open PRs never touch the same area.
-  const inProgress = input.tasks.filter((t) => ACTIVE_STATES.includes(t.state) || input.runningTaskIds.has(t.id));
-  const busyAreas = new Set(inProgress.map(areaKey).filter((k): k is string => k !== null));
+  // An area is held from a task's first build until it merges, including while it waits in the queue for a fix
+  // or sits blocked on a question, so two open branches never touch the same area.
+  const holdsArea = (t: Task) =>
+    ACTIVE_STATES.includes(t.state) || input.runningTaskIds.has(t.id) || ((t.state === 'queued' || t.state === 'blocked') && t.branch !== null);
+  const areaHolders = new Map<string, string>();
+  for (const t of input.tasks) {
+    const k = areaKey(t);
+    if (k && holdsArea(t) && !areaHolders.has(k)) areaHolders.set(k, t.id);
+  }
   // Only runs with a live agent count against parallelism and the 5-hour budget.
   const inFlight = input.tasks.filter((t) => input.runningTaskIds.has(t.id)).map((t) => ({ estimatedCostPct: t.estimatedCostPct }));
 
@@ -68,14 +75,20 @@ export function schedule(cfg: GovernorConfig, input: SchedulerInput): SchedulerO
       skipped.push({ taskId: task.id, reason: 'project not active' });
       continue;
     }
-    // A dependency that isn't tracked as a task is treated as done (closed before the factory saw it).
-    const unmet = task.dependsOn.filter((d) => byId.has(d) && byId.get(d)!.state !== 'done');
+    if (task.notBefore !== null && task.notBefore > input.now) {
+      skipped.push({ taskId: task.id, reason: 'backing off after a runner error' });
+      wakeAt = wakeAt === null ? task.notBefore : Math.min(wakeAt, task.notBefore);
+      continue;
+    }
+    // A dependency that isn't tracked is treated as done (closed before the factory saw it). A cancelled one blocks.
+    const unmet = task.dependsOn.filter((d) => input.cancelledTaskIds?.has(d) || (byId.has(d) && byId.get(d)!.state !== 'done'));
     if (unmet.length > 0) {
       skipped.push({ taskId: task.id, reason: `waiting on ${unmet.join(', ')}` });
       continue;
     }
     const area = areaKey(task);
-    if (area && busyAreas.has(area)) {
+    const holder = area ? areaHolders.get(area) : undefined;
+    if (area && holder !== undefined && holder !== task.id) {
       skipped.push({ taskId: task.id, reason: `area ${task.area} busy` });
       continue;
     }
@@ -98,7 +111,7 @@ export function schedule(cfg: GovernorConfig, input: SchedulerInput): SchedulerO
 
     picks.push({ task, model });
     inFlight.push({ estimatedCostPct: task.estimatedCostPct });
-    if (area) busyAreas.add(area);
+    if (area) areaHolders.set(area, task.id);
   }
 
   return { picks, skipped, wakeAt };

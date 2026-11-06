@@ -13,7 +13,10 @@ done
 [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || { echo "token not passed" >&2; exit 3; }
 cd "$WORK"
 # The runner passes only whitelisted env vars, so the test leaves the mode in a file: <root>/mode
-MODE=$(cat "$WORK/../../../mode" 2>/dev/null || echo success)
+ROOT="$WORK/../../.."
+MODE=$(cat "$ROOT/mode" 2>/dev/null || echo success)
+printenv | cut -d= -f1 | sort > "$ROOT/envseen"
+echo "$*" > "$ROOT/argsseen"
 g() { git -c user.name=fake -c user.email=fake@x "$@"; }
 echo '{"type":"system","subtype":"init","session_id":"sess-fake"}'
 case "$MODE" in
@@ -31,6 +34,16 @@ case "$MODE" in
     echo "wip" >> wip.txt
     g add wip.txt && g commit -qm "wip"
     echo '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"sess-fake","result":"Claude usage limit reached.","num_turns":2}'
+    ;;
+  tamper)
+    # A misbehaving agent tries to grant itself more secrets via the branch's factory.yaml
+    printf 'kind: web-app\nsecrets: [APP_SECRET, EVIL_SECRET]\n' > factory.yaml
+    g add factory.yaml && g commit -qm "chore: tweak config" && g push -q -u origin HEAD 2>/dev/null
+    echo '{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"sess-fake","result":"failed","num_turns":5}'
+    ;;
+  crash)
+    echo "docker: image not found" >&2
+    exit 125
     ;;
   fail)
     echo '{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"sess-fake","result":"Could not make the tests pass.","num_turns":120}'

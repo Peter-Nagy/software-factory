@@ -104,6 +104,8 @@ export class StreamParser {
   private usage: Partial<UsageSnapshot> | null = null;
   private limitHit = false;
   readonly malformedLines: string[] = [];
+  /** Called once, the first time the run reports its session id. */
+  onSession?: (sessionId: string) => void;
 
   push(line: string): void {
     const trimmed = line.trim();
@@ -117,7 +119,10 @@ export class StreamParser {
       return;
     }
     if (!isObj(ev)) return;
-    if (typeof ev.session_id === 'string') this.sessionId = ev.session_id;
+    if (typeof ev.session_id === 'string') {
+      if (this.sessionId === null) this.onSession?.(ev.session_id);
+      this.sessionId = ev.session_id;
+    }
 
     const u = extractUsage(ev);
     if (u) this.usage = { ...(this.usage ?? {}), ...u };
@@ -153,9 +158,11 @@ export class StreamParser {
       durationMs: r ? num(r.duration_ms) : null,
       permissionDenials: [...new Set(this.denials)],
       usage: this.usage,
-      hitUsageLimit: this.limitHit,
+      // A rate-limit retry in the middle of a run that then succeeds is not a usage-limit stop.
+      hitUsageLimit: this.limitHit && !ok,
       structuredOutput: r ? r.structured_output ?? null : null,
       timedOut,
+      completed: r !== null,
     };
   }
 }

@@ -13,7 +13,7 @@ function task(p: Partial<Task>): Task {
   return {
     id: `app#${seq}`, projectId: 'app', issueNumber: seq, title: `Task ${seq}`, state: 'queued', priority: 3, risk: 'medium',
     area: null, dependsOn: [], attempt: 0, fixRounds: 0, sessionId: null, branch: null, prNumber: null, splitOnFail: false,
-    estimatedCostPct: 5, lastFailure: null, createdAt: NOW - 1000 + seq, updatedAt: NOW, ...p,
+    pendingMode: 'build', interruptions: 0, notBefore: null, estimatedCostPct: 5, lastFailure: null, createdAt: NOW - 1000 + seq, updatedAt: NOW, ...p,
   };
 }
 
@@ -67,10 +67,29 @@ test('stops at the 5-hour budget and reports the wake time', () => {
   assert.equal(full.wakeAt, NOW + 1800 + cfg.resumeGraceSeconds);
 });
 
-test('model follows the attempt ladder; a session continues its attempt', () => {
+test('model follows the attempt ladder; fix and resume continue the current attempt', () => {
   assert.equal(modelForNextRun(task({ attempt: 0 })), 'sonnet');
   assert.equal(modelForNextRun(task({ attempt: 1 })), 'sonnet'); // fresh second attempt
   assert.equal(modelForNextRun(task({ attempt: 2 })), 'opus'); // fresh third attempt
-  assert.equal(modelForNextRun(task({ attempt: 2, sessionId: 's' })), 'sonnet'); // fixing attempt 2
+  assert.equal(modelForNextRun(task({ attempt: 2, pendingMode: 'fix' })), 'sonnet'); // fixing attempt 2
+  assert.equal(modelForNextRun(task({ attempt: 3, pendingMode: 'resume' })), 'opus'); // resuming attempt 3
   assert.equal(modelForNextRun(task({ attempt: 0, risk: 'high' })), 'opus');
+});
+
+test('a queued task with a branch keeps its area; it can still run itself', () => {
+  const waitingFix = task({ area: 'auth', branch: 'claude/1-x', pendingMode: 'fix', attempt: 1 });
+  const other = task({ area: 'auth' });
+  const out = schedule(cfg, input([waitingFix, other]));
+  assert.deepEqual(out.picks.map((p) => p.task.id), [waitingFix.id]);
+  const blocked = task({ area: 'ui', state: 'blocked', branch: 'claude/2-y' });
+  const sameArea = task({ area: 'ui' });
+  assert.equal(schedule(cfg, input([blocked, sameArea])).picks.length, 0);
+});
+
+test('backoff and cancelled dependencies hold tasks back', () => {
+  const later = task({ notBefore: NOW + 300 });
+  const dependent = task({ dependsOn: ['app#500'] });
+  const out = schedule(cfg, input([later, dependent], { cancelledTaskIds: new Set(['app#500']) }));
+  assert.equal(out.picks.length, 0);
+  assert.equal(out.wakeAt, NOW + 300);
 });

@@ -82,3 +82,18 @@ test('sprint window before weekly reset lifts the burn line', () => {
   const nearReset = usage({ sevenDayPct: 85, sevenDayResetsAt: NOW + 6 * 3600 });
   assert.equal(decide(cfg, input({ usage: nearReset, model: 'opus' })).allow, true);
 });
+
+test('a known limit keeps blocking after the reading goes stale, until its reset', () => {
+  const hitLongAgo = usage({ fiveHourPct: 100, fiveHourResetsAt: NOW + 600, takenAt: NOW - 3 * 3600 });
+  const d = decide(cfg, input({ usage: hitLongAgo }));
+  assert.equal(d.allow, false);
+  assert.equal(!d.allow && d.retryAt, NOW + 600 + cfg.resumeGraceSeconds);
+  // Once the reset has passed, the stale reading means "unknown": conservative start allowed.
+  assert.equal(decide(cfg, input({ usage: usage({ fiveHourPct: 100, fiveHourResetsAt: NOW - 1, takenAt: NOW - 3 * 3600 }) })).allow, true);
+  const weekly = usage({ sevenDayPct: 99, sevenDayResetsAt: NOW + 2 * DAY, takenAt: NOW - 2 * DAY });
+  assert.equal(decide(cfg, input({ usage: weekly })).allow, false);
+});
+
+test('a fresh reading without a 5-hour number is treated as unknown', () => {
+  assert.equal(decide(cfg, input({ usage: usage({ fiveHourPct: null }), model: 'opus' })).allow, false);
+});

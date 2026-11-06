@@ -14,6 +14,8 @@ export type Role =
 export type Risk = 'low' | 'medium' | 'high';
 export type ProjectKind = 'web-app' | 'static-site' | 'service' | 'cli' | 'ios';
 
+export type RunMode = 'build' | 'fix' | 'resume';
+
 export type ProjectState = 'spec_pending' | 'awaiting_approval' | 'active' | 'paused' | 'archived';
 
 /**
@@ -58,6 +60,12 @@ export interface Task {
   branch: string | null;
   prNumber: number | null;
   splitOnFail: boolean;
+  /** What the next run does: start a new attempt, fix in the existing session, or continue an interrupted run. */
+  pendingMode: RunMode;
+  /** Consecutive runs that ended without a verdict (usage limit, runner error). Reset by any completed run. */
+  interruptions: number;
+  /** Don't start before this time (epoch seconds), used for backoff after runner errors. */
+  notBefore: number | null;
   estimatedCostPct: number; // estimated share of a 5-hour window this task's next run uses
   lastFailure: string | null;
   createdAt: number;
@@ -86,4 +94,6 @@ export interface RunResult {
   hitUsageLimit: boolean;
   structuredOutput: unknown;
   timedOut: boolean;
+  /** A final result event arrived. false = the agent never finished (runner error, crash, killed). */
+  completed: boolean;
 }

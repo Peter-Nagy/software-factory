@@ -17,13 +17,15 @@ export function snapshotAfterRun(prev: UsageSnapshot | null, run: RunResult, now
     fiveHourResetsAt: u.fiveHourResetsAt ?? prevFive.resetsAt,
     sevenDayPct: u.sevenDayPct ?? prevSeven.pct,
     sevenDayResetsAt: u.sevenDayResetsAt ?? prevSeven.resetsAt,
-    source: run.usage ? 'stream' : 'estimate',
-    takenAt: now,
+    source: run.usage ? 'stream' : prev?.source ?? 'estimate',
+    // Copied numbers keep their original time, so an old reading never looks fresh.
+    takenAt: run.usage ? now : prev?.takenAt ?? now,
   };
 
   if (run.hitUsageLimit && u.fiveHourPct === undefined) {
     snap.fiveHourPct = 100;
     snap.source = 'limit-error';
+    snap.takenAt = now;
     // Without a reported reset time, check again in 30 minutes with a cheap probe run.
     snap.fiveHourResetsAt ??= now + 30 * 60;
   }

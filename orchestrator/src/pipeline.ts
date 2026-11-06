@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildClaudeArgs } from './claude.ts';
 import { parseProjectConfig, type FactoryConfig, type ProjectConfig } from './config.ts';
@@ -7,7 +7,7 @@ import type { GitHub } from './github.ts';
 import { nextStep } from './retry.ts';
 import { promptPath, roleConfig } from './roles.ts';
 import { runInContainer } from './runner/container.ts';
-import { authConfig, checkoutPath, git, hasUnpushedCommits, prepareCheckout } from './runner/worktree.ts';
+import { checkoutPath, git, gitRemote, hasUnpushedCommits, prepareCheckout, redact } from './runner/worktree.ts';
 import type { Secrets } from './secrets.ts';
 import { branchName } from './tasks.ts';
 import type { Model, Project, RunResult, Task } from './types.ts';
@@ -25,7 +25,7 @@ export interface PipelineContext {
   notify(kind: 'question' | 'alert' | 'info', text: string): Promise<void>;
 }
 
-/** Files the agent writes for the orchestrator. Excluded from git via .git/info/exclude. */
+/** Files the agent writes for the orchestrator. Excluded from git via .git/info/exclude and cleared before each run. */
 export const FACTORY_DIR = '.factory';
 export interface AgentQuestion {
   question: string;
@@ -33,6 +33,10 @@ export interface AgentQuestion {
   default: string;
   smallUiChoice?: boolean;
 }
+
+/** Usage-limit stops or runner errors in a row before a task is parked for a human to look at. */
+export const MAX_INTERRUPTIONS = 5;
+const RUNNER_BACKOFF_S = 5 * 60;
 
 export function implementerPrompt(task: Task, failureSummary: string | null): string {
   const lines = [
@@ -56,6 +60,12 @@ export function fixPrompt(failure: string): string {
   ].join('\n');
 }
 
+export const RESUME_PROMPT = [
+  'Your previous run was interrupted (usage limit or restart). Continue the same task where you left off.',
+  'Check `git status` and `git log` first: uncommitted changes from before the interruption are gone, pushed commits are there.',
+  `Finish as instructed earlier, including ${FACTORY_DIR}/summary.md.`,
+].join('\n');
+
 function readJson<T>(path: string): T | null {
   if (!existsSync(path)) return null;
   try {
@@ -65,39 +75,59 @@ function readJson<T>(path: string): T | null {
   }
 }
 
-export function loadProjectConfig(dir: string): ProjectConfig {
-  const p = join(dir, 'factory.yaml');
-  return parseProjectConfig(existsSync(p) ? readFileSync(p, 'utf8') : 'kind: web-app');
+/**
+ * The project's factory.yaml as it is on origin/main, never the task branch: the agent controls its branch,
+ * and the config decides which secrets the container gets.
+ */
+export async function loadProjectConfig(dir: string, base = 'main'): Promise<ProjectConfig> {
+  const text = await git(dir, 'show', `origin/${base}:factory.yaml`).catch(() => 'kind: web-app');
+  return parseProjectConfig(text);
 }
 
 /**
- * Run the implementer (or fixer) for one task, then route the outcome:
- * usage limit -> checkpoint and requeue; question -> blocked; pushed work -> PR + in_review; failure -> retry ladder.
+ * Run the implementer for one task according to its pending mode (build / fix / resume), then route the outcome:
+ * runner error -> backoff; usage limit -> checkpoint; question -> blocked; pushed work -> PR + in_review;
+ * any other failure -> retry ladder.
  */
-export async function runBuild(ctx: PipelineContext, project: Project, task: Task, model: Model, mode: 'build' | 'fix', failure: string | null): Promise<void> {
+export async function runBuild(ctx: PipelineContext, project: Project, task: Task, model: Model): Promise<void> {
   const { config, store } = ctx;
   const role = roleConfig(config, 'implementer');
+  const mode = task.pendingMode;
   const branch = task.branch ?? branchName(task.issueNumber, task.title);
-  const attempt = mode === 'build' && task.sessionId === null ? task.attempt + 1 : task.attempt;
-  const resumeSessionId = mode === 'fix' || (task.sessionId && task.attempt > 0) ? task.sessionId : null;
+  const attempt = mode === 'build' ? task.attempt + 1 : Math.max(task.attempt, 1);
+  const resumeSessionId = mode === 'build' ? null : task.sessionId;
 
-  task = store.transition(task.id, mode === 'fix' ? 'fixing' : 'building', { branch, attempt, fixRounds: mode === 'fix' ? task.fixRounds + 1 : task.fixRounds });
+  task = store.transition(task.id, mode === 'fix' ? 'fixing' : 'building', {
+    branch,
+    attempt,
+    fixRounds: mode === 'build' ? 0 : mode === 'fix' ? task.fixRounds + 1 : task.fixRounds,
+    sessionId: mode === 'build' ? null : task.sessionId,
+    notBefore: null,
+  });
 
   const { gh, token } = await ctx.repoAccess(project);
+  const clean = (text: string) => redact(text, token);
   const dir = checkoutPath(config.paths.worktrees, project.id, `${task.issueNumber}`);
   const remoteUrl = ctx.remoteUrl?.(project) ?? `https://github.com/${project.owner}/${project.id}.git`;
   await prepareCheckout({ remoteUrl, dir, branch, token });
-  mkdirSync(join(dir, FACTORY_DIR), { recursive: true });
+  const factoryDir = join(dir, FACTORY_DIR);
+  rmSync(factoryDir, { recursive: true, force: true }); // never act on a previous run's question or summary
+  mkdirSync(factoryDir, { recursive: true });
   appendFileSync(join(dir, '.git', 'info', 'exclude'), `\n${FACTORY_DIR}/\n`);
 
-  const projectConfig = loadProjectConfig(dir);
+  const projectConfig = await loadProjectConfig(dir);
   const env = {
     [config.worker.claudeTokenEnv]: await ctx.secrets.get(config.worker.claudeTokenEnv),
     GH_TOKEN: token,
     ...(await ctx.secrets.getMany(projectConfig.secrets)),
   };
 
-  const prompt = mode === 'fix' ? fixPrompt(failure ?? task.lastFailure ?? 'Unknown failure') : implementerPrompt({ ...task, branch }, failure);
+  const prompt =
+    mode === 'fix'
+      ? fixPrompt(task.lastFailure ?? 'Unknown failure')
+      : mode === 'resume' && resumeSessionId
+        ? RESUME_PROMPT
+        : implementerPrompt(task, task.lastFailure);
   const args = buildClaudeArgs({
     prompt,
     model,
@@ -129,72 +159,93 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
         labels: { 'factory.task': task.id },
       },
       args,
-      { env, timeoutMs: role.timeoutMinutes * 60_000, logPath },
+      { env, timeoutMs: role.timeoutMinutes * 60_000, logPath, onSession: (id) => store.setTaskSession(task.id, id) },
     );
   } catch (e) {
-    result = { ok: false, sessionId: task.sessionId, resultText: `Runner error: ${(e as Error).message}`, totalCostUsd: null, numTurns: null, durationMs: null, permissionDenials: [], usage: null, hitUsageLimit: false, structuredOutput: null, timedOut: false };
+    result = {
+      ok: false, sessionId: null, resultText: `Runner error: ${(e as Error).message}`, totalCostUsd: null, numTurns: null,
+      durationMs: null, permissionDenials: [], usage: null, hitUsageLimit: false, structuredOutput: null, timedOut: false, completed: false,
+    };
   }
 
-  store.finishRun(runId, result, result.resultText);
+  store.finishRun(runId, result, clean(result.resultText));
   const snap = snapshotAfterRun(store.latestUsage(), result, ctx.now());
   if (snap) store.recordUsage(snap);
-  const sessionId = result.sessionId ?? task.sessionId;
+  const sessionId = result.sessionId ?? store.task(task.id)?.sessionId ?? null;
+  const pushLocalWork = async () => {
+    if (await hasUnpushedCommits(dir, branch)) await gitRemote(dir, token, 'push', '-u', 'origin', `${branch}:${branch}`);
+  };
 
-  // 1. Usage limit: checkpoint. The agent commits as it goes; push whatever is local so nothing is lost.
-  if (result.hitUsageLimit) {
-    if (await hasUnpushedCommits(dir, branch)) await git(dir, ...authConfig(token), 'push', '-u', 'origin', 'HEAD');
-    store.transition(task.id, 'queued', { sessionId });
-    store.event('task.checkpoint', task.id, { reason: 'usage limit' });
+  // 1. Interrupted without a verdict: usage limit, or the runner itself failed (Docker down, image missing, crash).
+  //    Neither is the task's fault, so the retry ladder is not consumed. Too many in a row parks the task.
+  if (result.hitUsageLimit || (!result.completed && !result.timedOut)) {
+    await pushLocalWork().catch(() => undefined);
+    const interruptions = task.interruptions + 1;
+    const why = result.hitUsageLimit ? 'usage limit' : clean(result.resultText || 'runner ended without a result');
+    if (interruptions >= MAX_INTERRUPTIONS) {
+      store.transition(task.id, 'parked', { sessionId, interruptions, lastFailure: `Interrupted ${interruptions} times in a row; last: ${why}` });
+      await ctx.notify('alert', `Parked ${task.id}: interrupted ${interruptions} times in a row (${why}).`);
+      return;
+    }
+    store.transition(task.id, 'queued', {
+      sessionId,
+      interruptions,
+      // A fix interrupted before it finished is resumed as a fix; anything else continues its attempt.
+      pendingMode: mode === 'fix' && sessionId === null ? 'fix' : 'resume',
+      fixRounds: mode === 'fix' ? Math.max(task.fixRounds - 1, 0) : task.fixRounds,
+      notBefore: result.hitUsageLimit ? null : ctx.now() + RUNNER_BACKOFF_S * interruptions,
+    });
+    store.event(result.hitUsageLimit ? 'task.checkpoint' : 'task.runner_error', task.id, { why });
     return;
   }
 
   // 2. The agent needs a product decision.
-  const question = readJson<AgentQuestion>(join(dir, FACTORY_DIR, 'question.json'));
+  const question = readJson<AgentQuestion>(join(factoryDir, 'question.json'));
   if (question) {
     const hours = question.smallUiChoice ? config.questions.smallUiTimeoutHours : config.questions.defaultTimeoutHours;
     store.db
       .prepare('INSERT INTO questions (task_id, project_id, question, options, default_option, asked_at, timeout_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(task.id, project.id, question.question, JSON.stringify(question.options), question.default, ctx.now(), ctx.now() + hours * 3600);
-    store.transition(task.id, 'blocked', { sessionId });
+    await pushLocalWork().catch(() => undefined);
+    store.transition(task.id, 'blocked', { sessionId, interruptions: 0, pendingMode: 'resume' });
     await ctx.notify('question', `${task.id}: ${question.question}`);
     return;
   }
 
   // 3. Work pushed: open (or reuse) the PR and hand over to the gates.
-  // The host checks the remote with the repo token (the repo is private).
-  const remoteHead = await git(dir, ...authConfig(token), 'ls-remote', 'origin', `refs/heads/${branch}`).catch(() => '');
+  const remoteHead = await gitRemote(dir, token, 'ls-remote', 'origin', `refs/heads/${branch}`).catch(() => '');
   if (result.ok && remoteHead) {
-    const summaryPath = join(dir, FACTORY_DIR, 'summary.md');
-    const body = `${existsSync(summaryPath) ? readFileSync(summaryPath, 'utf8') : result.resultText}\n\nCloses #${task.issueNumber}\n\n_Built by the software factory (${model}, attempt ${attempt})._`;
+    const summaryPath = join(factoryDir, 'summary.md');
+    const summary = existsSync(summaryPath) ? readFileSync(summaryPath, 'utf8') : result.resultText;
+    const body = `${clean(summary)}\n\nCloses #${task.issueNumber}\n\n_Built by the software factory (${model}, attempt ${attempt})._`;
     const existing = await gh.findOpenPullRequest(project.owner, project.id, branch);
     const pr = existing ?? (await gh.createPullRequest(project.owner, project.id, { title: task.title, head: branch, base: 'main', body }));
-    store.transition(task.id, 'in_review', { sessionId, prNumber: pr.number, lastFailure: null });
+    store.transition(task.id, 'in_review', { sessionId, prNumber: pr.number, lastFailure: null, interruptions: 0 });
     return;
   }
 
-  // 4. Failure: follow the retry ladder.
-  const why = result.timedOut ? 'Run timed out.' : result.resultText || 'Run ended without pushing any work.';
-  await handleFailure(ctx, task, sessionId, why);
+  // 4. A real failure: follow the retry ladder.
+  const why = result.timedOut ? 'Run timed out.' : clean(result.resultText || 'Run ended without pushing any work.');
+  await handleFailure(ctx, task.id, sessionId, why);
 }
 
-/** Apply the retry ladder after any failed build, gate or review. */
-export async function handleFailure(ctx: PipelineContext, task: Task, sessionId: string | null, why: string): Promise<void> {
-  const current = ctx.store.task(task.id)!;
+/** Apply the retry ladder after a failed build, gate or review. */
+export async function handleFailure(ctx: PipelineContext, taskId: string, sessionId: string | null, why: string): Promise<void> {
+  const current = ctx.store.task(taskId)!;
   const step = nextStep({ risk: current.risk, attempt: Math.max(current.attempt, 1), fixRounds: current.fixRounds, sessionId, splitOnFail: current.splitOnFail });
   switch (step.action) {
     case 'fix':
-      // Stay resumable: the next tick picks it up as a fix run on the same session.
-      ctx.store.transition(task.id, 'queued', { sessionId, lastFailure: why });
-      ctx.store.event('task.fix_scheduled', task.id, {});
+      ctx.store.transition(taskId, 'queued', { sessionId, lastFailure: why, pendingMode: 'fix', interruptions: 0 });
+      ctx.store.event('task.fix_scheduled', taskId, {});
       return;
     case 'restart':
-      ctx.store.transition(task.id, 'queued', { sessionId: null, fixRounds: 0, lastFailure: why });
-      ctx.store.event('task.restart', task.id, { model: step.model, attempt: step.attempt });
+      ctx.store.transition(taskId, 'queued', { sessionId: null, fixRounds: 0, lastFailure: why, pendingMode: 'build', interruptions: 0 });
+      ctx.store.event('task.restart', taskId, { model: step.model, attempt: step.attempt });
       return;
     case 'split':
     case 'park':
-      ctx.store.transition(task.id, 'parked', { sessionId, lastFailure: why });
-      await ctx.notify('alert', `Parked ${task.id} (${step.action === 'split' ? 'needs splitting' : 'retries exhausted'}): ${why.slice(0, 300)}`);
+      ctx.store.transition(taskId, 'parked', { sessionId, lastFailure: why, interruptions: 0 });
+      await ctx.notify('alert', `Parked ${taskId} (${step.action === 'split' ? 'needs splitting' : 'retries exhausted'}): ${why.slice(0, 300)}`);
       return;
   }
 }

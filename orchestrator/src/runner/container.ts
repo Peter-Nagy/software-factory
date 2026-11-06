@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { StreamParser } from '../claude.ts';
@@ -63,6 +63,7 @@ export interface RunOptions {
   timeoutMs: number;
   logPath: string;
   onLine?: (line: string) => void; // live log tail for the dashboard
+  onSession?: (sessionId: string) => void; // first session id seen
   docker?: string; // binary, default "docker"
 }
 
@@ -79,6 +80,7 @@ export function runInContainer(spec: ContainerSpec, claudeArgs: string[], opts: 
     });
     const log = createWriteStream(opts.logPath, { flags: 'a' });
     const parser = new StreamParser();
+    parser.onSession = opts.onSession;
     let timedOut = false;
 
     const timer = setTimeout(() => {
@@ -104,4 +106,11 @@ export function runInContainer(spec: ContainerSpec, claudeArgs: string[], opts: 
       resolve(parser.finish(timedOut));
     });
   });
+}
+
+/** Remove containers left over from a previous orchestrator process (after a crash or a forced exit). */
+export function killLeftoverContainers(docker = process.env.FACTORY_DOCKER_BIN ?? 'docker'): void {
+  const ps = spawnSync(docker, ['ps', '-q', '--filter', 'label=factory.run'], { encoding: 'utf8' });
+  const ids = (ps.stdout ?? '').split('\n').filter(Boolean);
+  if (ids.length) spawnSync(docker, ['rm', '-f', ...ids], { stdio: 'ignore' });
 }

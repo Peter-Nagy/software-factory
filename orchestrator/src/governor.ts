@@ -50,18 +50,28 @@ export function decide(cfg: GovernorConfig, input: GovernorInput): GovernorDecis
     return { allow: false, reason: `parallel cap reached (${running.length}/${cap})`, retryAt: null };
   }
 
-  const fresh = usage !== null && now - usage.takenAt <= USAGE_STALE_AFTER_S;
+  // A known limit that hasn't reset yet blocks no matter how old the reading is:
+  // usage only refreshes when a run finishes, so "stale" must never mean "free to go" during a limit.
+  if (usage !== null) {
+    const isFresh = now - usage.takenAt <= USAGE_STALE_AFTER_S;
+    const stillOn = (resetsAt: number | null) => (resetsAt !== null ? resetsAt > now : isFresh);
+    if (usage.sevenDayPct !== null && usage.sevenDayPct >= cfg.weeklyHardStopPct && stillOn(usage.sevenDayResetsAt)) {
+      return { allow: false, reason: `weekly usage at ${usage.sevenDayPct}%`, retryAt: usage.sevenDayResetsAt !== null ? usage.sevenDayResetsAt + cfg.resumeGraceSeconds : null };
+    }
+    if (usage.fiveHourPct !== null && usage.fiveHourPct >= cfg.anyMaxFiveHourPct && stillOn(usage.fiveHourResetsAt)) {
+      return { allow: false, reason: `5-hour usage at ${usage.fiveHourPct}%`, retryAt: usage.fiveHourResetsAt !== null ? usage.fiveHourResetsAt + cfg.resumeGraceSeconds : null };
+    }
+  }
+
+  const fresh = usage !== null && usage.fiveHourPct !== null && now - usage.takenAt <= USAGE_STALE_AFTER_S;
   if (!fresh || usage === null) {
     // No reliable numbers: allow conservatively, never Opus, until a run reports usage.
     if (model === 'opus') return { allow: false, reason: 'usage unknown; holding Opus runs', retryAt: null };
     return { allow: true, reason: 'usage unknown; conservative start' };
   }
 
-  // Weekly window.
+  // Weekly window: pace against the burn line.
   if (usage.sevenDayPct !== null && usage.sevenDayResetsAt !== null) {
-    if (usage.sevenDayPct >= cfg.weeklyHardStopPct) {
-      return { allow: false, reason: `weekly usage at ${usage.sevenDayPct}%`, retryAt: usage.sevenDayResetsAt + cfg.resumeGraceSeconds };
-    }
     const line = weeklyBurnLine(cfg, now, usage.sevenDayResetsAt);
     if (usage.sevenDayPct > line) {
       if (model === 'opus') {
@@ -76,9 +86,6 @@ export function decide(cfg: GovernorConfig, input: GovernorInput): GovernorDecis
   // 5-hour window.
   if (usage.fiveHourPct !== null) {
     const retryAt = usage.fiveHourResetsAt !== null ? usage.fiveHourResetsAt + cfg.resumeGraceSeconds : null;
-    if (usage.fiveHourPct >= cfg.anyMaxFiveHourPct) {
-      return { allow: false, reason: `5-hour usage at ${usage.fiveHourPct}%`, retryAt };
-    }
     if (model === 'opus' && usage.fiveHourPct >= cfg.opusMaxFiveHourPct) {
       return { allow: false, reason: `5-hour usage at ${usage.fiveHourPct}%; no new Opus runs`, retryAt };
     }
