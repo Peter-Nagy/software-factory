@@ -40,6 +40,12 @@ questions:
   defaultTimeoutHours: 24
   smallUiTimeoutHours: 4
 
+# Discord remote control (optional): server ID, your own user ID, and the bot token's name in the Factory vault
+discord:
+  guildId: "000000000000000000"
+  ownerUserId: "000000000000000000"
+  botTokenSecret: DISCORD_BOT_TOKEN
+
 schedule:
   tickSeconds: 30
   timezone: Europe/Budapest

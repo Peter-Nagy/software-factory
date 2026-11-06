@@ -83,6 +83,17 @@ const MIGRATIONS: string[] = [
      data TEXT NOT NULL DEFAULT '{}'
    );
    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+  // v2: question kinds (product decision vs destructive-migration approval), answer delivery, ideas from Discord
+  `ALTER TABLE questions ADD COLUMN kind TEXT NOT NULL DEFAULT 'product';
+   ALTER TABLE questions ADD COLUMN delivered INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE questions ADD COLUMN discord_channel_id TEXT;
+   CREATE TABLE ideas (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     at INTEGER NOT NULL,
+     name TEXT NOT NULL,
+     text TEXT NOT NULL,
+     state TEXT NOT NULL DEFAULT 'new'
+   );`,
 ];
 
 type Row = Record<string, unknown>;

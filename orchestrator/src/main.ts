@@ -1,5 +1,9 @@
 import { createApp, recoverInterrupted, syncIssues } from './app.ts';
 import { runBuild } from './pipeline.ts';
+import { Bot } from './discord/bot.ts';
+import { containerIntake } from './discord/intake.ts';
+import { DiscordRest } from './discord/rest.ts';
+import { applyTimeouts } from './questions.ts';
 import { killLeftoverContainers } from './runner/container.ts';
 import { REVIEW_COST_PCT, reviewModelGuess, runReviewStage } from './review.ts';
 import { schedule, scheduleReviews } from './scheduler.ts';
@@ -13,6 +17,25 @@ async function main(): Promise<void> {
   const reviewing = new Map<string, string>(); // task id -> project id, for tasks in the review stage
   let stopping = false;
   let lastSync = 0;
+
+  // Discord remote control (optional). Notifications fall back to the log when it's not configured.
+  let bot: Bot | null = null;
+  if (config.discord) {
+    try {
+      const token = await app.secrets.get(config.discord.botTokenSecret);
+      bot = new Bot({ ctx: app, rest: new DiscordRest(token), guildId: config.discord.guildId, ownerUserId: config.discord.ownerUserId, intake: containerIntake(app) });
+      await bot.start(token);
+      const logNotify = app.notify;
+      app.notify = async (kind, text) => {
+        await logNotify(kind, text);
+        await bot?.notify(kind, text).catch((e: Error) => console.error(`Discord notify failed: ${e.message}`));
+      };
+      console.log('Discord bot connected.');
+    } catch (e) {
+      bot = null;
+      console.error(`Discord bot not started: ${(e as Error).message}`);
+    }
+  }
 
   const recovered = recoverInterrupted(app);
   if (recovered.length) console.log(`Requeued interrupted tasks: ${recovered.join(', ')}`);
@@ -34,6 +57,12 @@ async function main(): Promise<void> {
     if (now - lastSync >= ISSUE_SYNC_EVERY_S) {
       await syncIssues(app);
       lastSync = now;
+    }
+
+    if (bot) {
+      await bot.tick(now, config.schedule.timezone, config.schedule.digestHourLocal).catch((e: Error) => console.error(`Discord tick failed: ${e.message}`));
+    } else {
+      for (const t of applyTimeouts(app)) console.log(`Question #${t.id} timed out; applied "${t.answer}": ${t.effect}`);
     }
 
     const projects = store.projects();
@@ -115,6 +144,7 @@ async function main(): Promise<void> {
   }
 
   await Promise.allSettled(running.values());
+  bot?.stop();
   store.close();
 }
 

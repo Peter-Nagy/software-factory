@@ -30,7 +30,28 @@ How to install, operate and recover the factory on the Mac mini. The design live
 6. **Config:** edit `~/factory/factory.config.yaml` (App ID, installation ID).
 7. **Start:** `bash ops/setup.sh --launchd`. Logs: `~/factory/logs/orchestrator.log`.
 
-## Adding a project (until the planner/Discord milestones land)
+## Discord
+
+1. Create a private server, then an application at https://discord.com/developers/applications. On its Bot tab, reset and copy
+   the token, turn on **Message Content Intent**, and turn off **Public Bot**.
+2. OAuth2 → URL Generator: scopes `bot` and `applications.commands`; bot permissions: Manage Channels, View Channels,
+   Send Messages, Read Message History, Embed Links. Open the URL and add the bot to the server.
+3. Store the token as `DISCORD_BOT_TOKEN` in the Factory vault.
+4. Add `discord: {guildId, ownerUserId}` to `~/factory/factory.config.yaml` (Developer Mode → right-click → Copy ID), then
+   restart: `launchctl kickstart -k gui/$(id -u)/eu.peterszn.factory.orchestrator`. The bot creates its channels.
+
+| Channel | What |
+| --- | --- |
+| #inbox | Write tasks, answers or ideas in plain words (Haiku sorts them) |
+| #questions | Agents' product questions, with buttons; the default applies after 24 h (4 h for small UI choices) |
+| #approvals | Destructive migrations: approve or reject; no answer within 7 days means reject |
+| #alerts | Parked tasks and factory problems (mentions you) |
+| #digest | Daily summary at 08:00 |
+
+Slash commands: `/status`, `/usage`, `/pause hours`, `/resume`, `/task project text`, `/retry task`, `/answer id text`.
+Only the `ownerUserId` can use them; the bot ignores everyone else.
+
+## Adding a project (until the planner milestone lands)
 
 1. Create the repo and add the topic `factory-managed`. Add a `factory.yaml` (see `orchestrator/src/config.ts`, `ProjectConfigSchema`).
 2. `node orchestrator/src/cli.ts add-project <repo> --kind web-app --priority 3`

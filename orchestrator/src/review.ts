@@ -89,7 +89,7 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
     if (findings.length) {
       const list = findings.map((f) => `- ${f.file}:${f.line} ${f.rule}: ${f.text}`).join('\n');
       store.db
-        .prepare('INSERT INTO questions (task_id, project_id, question, options, default_option, asked_at, timeout_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .prepare(`INSERT INTO questions (kind, task_id, project_id, question, options, default_option, asked_at, timeout_at) VALUES ('migration', ?, ?, ?, ?, ?, ?, ?)`)
         // Never auto-approved: the default on timeout is to reject.
         .run(task.id, project.id, `PR #${prNumber} contains destructive database changes:\n${list}\nApprove the merge?`, JSON.stringify(['approve', 'reject']), 'reject', ctx.now(), ctx.now() + 7 * 86400);
       store.setSetting(`pendingApproval:${task.id}`, patchId);

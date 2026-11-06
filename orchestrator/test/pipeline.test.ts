@@ -160,3 +160,17 @@ test('pipeline: the agent only ever gets the read-only token; the host pushes it
   assert.equal(r.task.state, 'in_review');
   assert.equal(r.g(r.origin, 'log', '-1', '--format=%s', 'claude/16-issue-16'), 'feat: fake work');
 });
+
+test('pipeline: an answered question reaches the resumed agent in its prompt', async () => {
+  const { answerQuestion } = await import('../src/questions.ts');
+  const r = await run('question', 17);
+  assert.equal(r.task.state, 'blocked');
+  const q = r.store.db.prepare('SELECT id FROM questions WHERE task_id = ?').get('app#17') as { id: number };
+  assert.equal(answerQuestion(r.ctx, q.id, 'green', 'owner').ok, true);
+  writeFileSync(join(r.root, 'mode'), 'success');
+  await runBuild(r.ctx, r.project, r.store.task('app#17')!, 'sonnet');
+  const args = readFileSync(join(r.root, 'argsseen'), 'utf8');
+  assert.match(args, /--resume sess-fake/);
+  assert.match(args, /Which colour\?\s+Answer from the owner: green/);
+  assert.equal(r.store.task('app#17')!.state, 'in_review');
+});

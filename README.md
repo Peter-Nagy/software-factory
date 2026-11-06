@@ -15,7 +15,8 @@ turn ideas and GitHub issues into tested, reviewed and deployed apps while you'r
 | M1 core: config, SQLite state, governor, scheduler, retry ladder, container runner, issue to PR | Done; ran end to end on factory-sandbox |
 | M2 gates, independent review, auto-merge | Done; first real merge: factory-sandbox PR #2 |
 | M3 governor live: usage probe, own-use detection | Usage readings live from every run; own-use detection next |
-| M4 Discord · M5 planning · M6 deploy · M7 iOS · M8 maintenance · M9 dashboard · M10 self-improvement · M11 hardening | Planned |
+| M4 Discord: intake, questions with buttons, approvals, alerts, daily digest, slash commands | Built and tested; needs your bot token to go live |
+| M5 planning · M6 deploy · M7 iOS · M8 maintenance · M9 dashboard · M10 self-improvement · M11 hardening | Planned |
 
 ## Layout
 

@@ -4,6 +4,7 @@ import { buildClaudeArgs } from './claude.ts';
 import { parseProjectConfig, type FactoryConfig, type ProjectConfig } from './config.ts';
 import type { Store } from './db.ts';
 import { ORCHESTRATOR_PERMISSIONS, type GitHub, type RepoPermissions } from './github.ts';
+import { takeAnswersForTask } from './questions.ts';
 import { nextStep } from './retry.ts';
 import { promptPath, roleConfig } from './roles.ts';
 import { runInContainer } from './runner/container.ts';
@@ -126,12 +127,18 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
     ...(await ctx.secrets.getMany(projectConfig.secrets)),
   };
 
+  const answers = takeAnswersForTask(ctx, task.id);
+  const answerBlock = answers
+    ? `\n\nYou asked for product decisions earlier. Here they are; follow them and record each in docs/DECISIONS.md:\n\n${answers}`
+    : '';
   const prompt =
     mode === 'fix'
       ? fixPrompt(task.lastFailure ?? 'Unknown failure')
       : mode === 'resume' && resumeSessionId
-        ? RESUME_PROMPT
-        : implementerPrompt(task, task.lastFailure);
+        ? answers
+          ? `Continue the task.${answerBlock}\n\nFinish as instructed earlier, including ${FACTORY_DIR}/summary.md.`
+          : RESUME_PROMPT
+        : implementerPrompt(task, task.lastFailure) + answerBlock;
   const args = buildClaudeArgs({
     prompt,
     model,
@@ -208,7 +215,7 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
   if (question) {
     const hours = question.smallUiChoice ? config.questions.smallUiTimeoutHours : config.questions.defaultTimeoutHours;
     store.db
-      .prepare('INSERT INTO questions (task_id, project_id, question, options, default_option, asked_at, timeout_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .prepare(`INSERT INTO questions (kind, task_id, project_id, question, options, default_option, asked_at, timeout_at) VALUES ('product', ?, ?, ?, ?, ?, ?, ?)`)
       .run(task.id, project.id, question.question, JSON.stringify(question.options), question.default, ctx.now(), ctx.now() + hours * 3600);
     await pushLocalWork().catch(() => undefined);
     store.transition(task.id, 'blocked', { sessionId, interruptions: 0, pendingMode: 'resume' });

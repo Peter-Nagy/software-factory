@@ -78,6 +78,14 @@ export const FactoryConfigSchema = z.object({
       smallUiTimeoutHours: z.number().positive().default(4),
     })
     .default({}),
+  /** Discord remote control. Leave out to run without it (notifications go to the log). */
+  discord: z
+    .object({
+      guildId: z.string().regex(/^\d+$/),
+      ownerUserId: z.string().regex(/^\d+$/), // the only user whose commands and answers count
+      botTokenSecret: z.string().default('DISCORD_BOT_TOKEN'),
+    })
+    .optional(),
   schedule: z
     .object({
       tickSeconds: z.number().int().positive().default(30),

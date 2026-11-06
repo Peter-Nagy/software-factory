@@ -116,6 +116,10 @@ export class GitHub {
     ).then((prs) => prs[0] ?? null);
   }
 
+  createIssue(owner: string, repo: string, p: { title: string; body: string; labels: string[] }) {
+    return this.request<{ number: number; html_url: string }>('POST', `/repos/${owner}/${repo}/issues`, p);
+  }
+
   comment(owner: string, repo: string, issueNumber: number, body: string) {
     return this.request('POST', `/repos/${owner}/${repo}/issues/${issueNumber}/comments`, { body });
   }
