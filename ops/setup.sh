@@ -29,10 +29,19 @@ if ! have brew; then
   echo "Install Homebrew first: https://brew.sh  (then re-run this script)"
   exit 1
 fi
-brew install node@24 git jq gh cloudflared >/dev/null
-brew link --overwrite --force node@24 >/dev/null 2>&1 || true
-for cask in orbstack 1password-cli tailscale; do
-  brew list --cask "$cask" >/dev/null 2>&1 || brew install --cask "$cask"
+brew install git jq gh cloudflared >/dev/null
+# Node 22.18+ runs the TypeScript directly; keep a newer one if it's already there.
+if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=18)?0:1)' 2>/dev/null; then
+  brew install node@24 >/dev/null && brew link --overwrite --force node@24 >/dev/null 2>&1 || true
+fi
+# Container runtime: reuse Docker Desktop or OrbStack if one is installed; otherwise install OrbStack.
+if [ -d /Applications/Docker.app ]; then DOCKER_APP=Docker
+elif [ -d /Applications/OrbStack.app ]; then DOCKER_APP=OrbStack
+else brew install --cask orbstack; DOCKER_APP=OrbStack
+fi
+# These casks may ask for your password (installer packages); a failure here is not fatal.
+for cask in 1password-cli tailscale; do
+  brew list --cask "$cask" >/dev/null 2>&1 || brew install --cask "$cask" || echo "Could not install $cask; install it by hand later."
 done
 
 step "Claude Code CLI"
@@ -57,9 +66,9 @@ step "Node dependencies"
 
 step "Worker image"
 if ! docker info >/dev/null 2>&1; then
-  open -a OrbStack || true
-  echo "Waiting for OrbStack to start..."
-  for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 2; done
+  open -a "$DOCKER_APP" || true
+  echo "Waiting for $DOCKER_APP to start..."
+  for _ in $(seq 1 90); do docker info >/dev/null 2>&1 && break; sleep 2; done
 fi
 CLAUDE_VERSION="$(claude --version | awk '{print $1}')"
 docker build -t "factory-worker:$CLAUDE_VERSION" --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_VERSION" "$REPO_DIR/worker"
