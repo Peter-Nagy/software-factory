@@ -60,9 +60,10 @@ function toEpochSeconds(v: unknown): number | null {
 
 function windowFrom(o: unknown): { pct: number | null; resetsAt: number | null } | null {
   if (!isObj(o)) return null;
-  const pctRaw = num(o.used_percentage) ?? num(o.utilization) ?? num(o.usedPercentage);
-  // utilization may be reported as 0..1
-  const pct = pctRaw !== null && o.used_percentage === undefined && o.usedPercentage === undefined && pctRaw <= 1 ? pctRaw * 100 : pctRaw;
+  // Status-line shape: used_percentage (0..100). Headless rate_limit_event shape (spike S0-2a): utilization (0..1).
+  const used = num(o.used_percentage) ?? num(o.usedPercentage);
+  const util = num(o.utilization);
+  const pct = used ?? (util !== null ? Math.round(util * 1000) / 10 : null);
   const resetsAt = toEpochSeconds(o.resets_at ?? o.resetsAt);
   if (pct === null && resetsAt === null) return null;
   return { pct, resetsAt };
@@ -129,6 +130,10 @@ export class StreamParser {
 
     if (ev.type === 'system' && ev.subtype === 'permission_denied') {
       this.denials.push(String(ev.tool_name ?? ev.tool ?? 'unknown'));
+    }
+    // Headless runs emit {"type":"rate_limit_event","rate_limit_info":{"status":"allowed"|...}}; anything but allowed is a stop.
+    if (ev.type === 'rate_limit_event' && isObj(ev.rate_limit_info) && typeof ev.rate_limit_info.status === 'string' && ev.rate_limit_info.status !== 'allowed' && ev.rate_limit_info.status !== 'allowed_warning') {
+      this.limitHit = true;
     }
     if (ev.type === 'system' && ev.subtype === 'api_retry' && ev.error === 'rate_limit') {
       this.limitHit = true;

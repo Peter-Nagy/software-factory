@@ -13,8 +13,8 @@ PROMPT='In /work, create a small TypeScript module slugify.ts exporting slugify(
 (lowercase, ASCII only, words joined by "-", max 60 chars) and a test file slugify.test.ts using node:test
 with at least 6 cases. Run it with: node --test slugify.test.ts. Fix failures until the tests pass.'
 
-usage_pct() { # prints "five/seven" from the last stream line carrying rate limits, if any
-  grep -h -E '"five_hour"' "$1" 2>/dev/null | tail -1 | jq -r '[.. | objects | select(has("five_hour")) | .five_hour.used_percentage, .seven_day.used_percentage] | map(tostring) | join("/")' 2>/dev/null | head -1
+usage_pct() { # prints "five/seven" (percent) from the last rate_limit_event, if any
+  jq -r 'select(.type=="rate_limit_event") | .rate_limit_info.unifiedWindows | "\((.five_hour.utilization // 0) * 100)/\((.seven_day.utilization // 0) * 100)"' "$1" 2>/dev/null | tail -1
 }
 
 for model in haiku sonnet; do

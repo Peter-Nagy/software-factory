@@ -78,3 +78,12 @@ test('docker args: isolation flags, read-only config, secrets by name only', () 
   assert.deepEqual(args.slice(-4), ['factory-worker:1', 'claude', '-p', 'hi']);
   assert.throws(() => dockerRunArgs({ name: 'x', image: 'i', worktree: '/w', workerConfigDir: '/c', sessionsDir: '/s', cpus: 1, memoryGb: 1, envNames: ['bad name'] }, []));
 });
+
+test('usage from the real headless rate_limit_event (spike S0-2a, Claude Code 2.1.318)', () => {
+  const line = '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1793977200,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.13,"resetsAt":1793977200,"status":"allowed"},"seven_day":{"utilization":0.02,"resetsAt":1794301200,"status":"allowed"}}}}';
+  assert.deepEqual(extractUsage(JSON.parse(line)), { fiveHourPct: 13, fiveHourResetsAt: 1793977200, sevenDayPct: 2, sevenDayResetsAt: 1794301200 });
+  const ok = parseStream([line, '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'].join('\n'));
+  assert.equal(ok.hitUsageLimit, false);
+  const rejected = parseStream([line.replace('"status":"allowed","resetsAt"', '"status":"rejected","resetsAt"'), '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"stopped"}'].join('\n'));
+  assert.equal(rejected.hitUsageLimit, true);
+});
