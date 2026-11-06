@@ -14,7 +14,7 @@ export function appJwt(appId: string, privateKeyPem: string, nowSeconds = Math.f
 }
 
 export type RepoPermissions = Partial<
-  Record<'contents' | 'pull_requests' | 'issues' | 'checks' | 'statuses' | 'metadata' | 'workflows', 'read' | 'write'>
+  Record<'contents' | 'pull_requests' | 'issues' | 'checks' | 'statuses' | 'metadata' | 'workflows' | 'administration', 'read' | 'write'>
 >;
 
 /** Permissions a worker container gets: enough to push its branch and open/update a PR. No admin, no workflows. */
@@ -26,6 +26,23 @@ export const WORKER_PERMISSIONS: RepoPermissions = {
   statuses: 'read',
   metadata: 'read',
 };
+
+/**
+ * The orchestrator's own token for a repo: merge, post gate statuses, push sync merges (which can carry workflow
+ * changes from main). Never given to an agent.
+ */
+export const ORCHESTRATOR_PERMISSIONS: RepoPermissions = {
+  contents: 'write',
+  pull_requests: 'write',
+  issues: 'write',
+  statuses: 'write',
+  checks: 'read',
+  workflows: 'write',
+  metadata: 'read',
+};
+
+/** Statuses the factory posts; branch protection requires both. */
+export const STATUS_CONTEXTS = { gates: 'factory/gates', review: 'factory/review' } as const;
 
 export class GitHubError extends Error {
   readonly status: number;
@@ -119,7 +136,39 @@ export class GitHub {
     return bad ? 'failure' : 'success';
   }
 
-  mergePullRequest(owner: string, repo: string, prNumber: number, sha: string) {
-    return this.request('PUT', `/repos/${owner}/${repo}/pulls/${prNumber}/merge`, { merge_method: 'squash', sha });
+  /** Squash-merge, but only if the PR head is still `sha` (GitHub refuses with 409 otherwise). */
+  mergePullRequest(owner: string, repo: string, prNumber: number, sha: string, title: string) {
+    return this.request<{ sha: string; merged: boolean }>('PUT', `/repos/${owner}/${repo}/pulls/${prNumber}/merge`, {
+      merge_method: 'squash',
+      sha,
+      commit_title: `${title} (#${prNumber})`,
+    });
+  }
+
+  pullRequest(owner: string, repo: string, prNumber: number) {
+    return this.request<{ number: number; state: string; merged: boolean; head: { sha: string; ref: string }; base: { ref: string } }>(
+      'GET',
+      `/repos/${owner}/${repo}/pulls/${prNumber}`,
+    );
+  }
+
+  setStatus(owner: string, repo: string, sha: string, s: { state: 'pending' | 'success' | 'failure' | 'error'; context: string; description: string }) {
+    return this.request('POST', `/repos/${owner}/${repo}/statuses/${sha}`, { ...s, description: s.description.slice(0, 140) });
+  }
+
+  /**
+   * Protect the default branch: changes only through PRs, the factory's statuses required, no force pushes or deletion,
+   * and the rules apply to admins too. Needs a token with administration: write.
+   */
+  protectBranch(owner: string, repo: string, branch = 'main') {
+    return this.request('PUT', `/repos/${owner}/${repo}/branches/${branch}/protection`, {
+      required_status_checks: { strict: false, contexts: [STATUS_CONTEXTS.gates, STATUS_CONTEXTS.review] },
+      enforce_admins: true,
+      required_pull_request_reviews: { required_approving_review_count: 0, dismiss_stale_reviews: false },
+      restrictions: null,
+      allow_force_pushes: false,
+      allow_deletions: false,
+      required_linear_history: true,
+    });
   }
 }

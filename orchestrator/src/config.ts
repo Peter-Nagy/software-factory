@@ -108,6 +108,17 @@ export const ProjectConfigSchema = z.object({
       aiReview: z.boolean().default(true),
       destructiveMigrationCheck: z.boolean().default(true),
       migrationGlobs: z.array(z.string()).default(['**/migrations/**', '**/drizzle/**', '**/*.sql']),
+      /** Shell commands per check step. Unset steps use the defaults for the project kind; "" turns a step off. */
+      commands: z
+        .object({
+          install: z.string().optional(),
+          typecheck: z.string().optional(),
+          lint: z.string().optional(),
+          test: z.string().optional(),
+          e2e: z.string().optional(),
+        })
+        .default({}),
+      timeoutMinutes: z.number().positive().default(20),
     })
     .default({}),
   maintenance: z

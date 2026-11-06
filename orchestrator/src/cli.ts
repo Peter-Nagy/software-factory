@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { createApp } from './app.ts';
+import { approveMigration, rejectMigration } from './review.ts';
 import type { ProjectKind } from './types.ts';
 
 const HELP = `factory <command>
@@ -10,6 +11,9 @@ const HELP = `factory <command>
   usage                  Latest subscription usage reading
   pause <hours>          Start no new runs for <hours>
   resume                 Clear a pause
+  protect <repo>         (Re)apply branch protection on main: PRs only, factory checks required
+  approve <task-id>      Approve a held destructive migration (exactly the change that was flagged)
+  reject <task-id>       Reject it; the task is parked
   requeue <task-id>      Put a parked or blocked task back in the queue (e.g. "habit-tracker#12")
   cancel <task-id>       Cancel a task
 `;
@@ -35,9 +39,26 @@ async function main(): Promise<void> {
       if (!topics.includes(config.github.managedTopic)) {
         throw new Error(`${project.owner}/${project.id} lacks the "${config.github.managedTopic}" topic; the factory only touches repos that carry it.`);
       }
+      const { gh: admin } = await app.repoClient(project, { administration: 'write', metadata: 'read' });
+      await admin.protectBranch(project.owner, project.id);
       store.upsertProject(project);
       store.setProjectState(project.id, 'active');
-      console.log(`Added ${project.owner}/${project.id} (${project.kind}, priority ${project.priority}).`);
+      console.log(`Added ${project.owner}/${project.id} (${project.kind}, priority ${project.priority}); main is protected.`);
+      break;
+    }
+    case 'protect': {
+      if (!arg) throw new Error('Usage: protect <repo>');
+      const project = store.projects().find((p) => p.id === arg) ?? { id: arg, owner: config.github.owner, kind: 'web-app' as const, state: 'active' as const, priority: 3, createdAt: now };
+      const { gh: admin } = await app.repoClient(project, { administration: 'write', metadata: 'read' });
+      await admin.protectBranch(project.owner, project.id);
+      console.log(`Protected ${project.owner}/${project.id} main.`);
+      break;
+    }
+    case 'approve':
+    case 'reject': {
+      if (!arg) throw new Error(`Usage: ${cmd} <task-id>`);
+      (cmd === 'approve' ? approveMigration : rejectMigration)(app, arg);
+      console.log(`${arg}: ${cmd === 'approve' ? 'approved, back in review' : 'rejected, parked'}`);
       break;
     }
     case 'status': {

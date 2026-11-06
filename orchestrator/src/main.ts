@@ -1,7 +1,8 @@
 import { createApp, recoverInterrupted, syncIssues } from './app.ts';
 import { runBuild } from './pipeline.ts';
 import { killLeftoverContainers } from './runner/container.ts';
-import { schedule } from './scheduler.ts';
+import { REVIEW_COST_PCT, reviewModelGuess, runReviewStage } from './review.ts';
+import { schedule, scheduleReviews } from './scheduler.ts';
 
 const ISSUE_SYNC_EVERY_S = 300;
 
@@ -9,6 +10,7 @@ async function main(): Promise<void> {
   const app = await createApp();
   const { config, store } = app;
   const running = new Map<string, Promise<void>>();
+  const reviewing = new Map<string, string>(); // task id -> project id, for tasks in the review stage
   let stopping = false;
   let lastSync = 0;
 
@@ -36,7 +38,7 @@ async function main(): Promise<void> {
 
     const projects = store.projects();
     const pausedUntilRaw = store.getSetting('pausedUntil');
-    const out = schedule(config.governor, {
+    const base = {
       now,
       tasks: store.openTasks(),
       runningTaskIds: new Set(running.keys()),
@@ -45,7 +47,47 @@ async function main(): Promise<void> {
       usage: store.latestUsage(),
       pausedUntil: pausedUntilRaw ? Number(pausedUntilRaw) : null,
       ownUseDetected: store.getSetting('ownUseDetected') === '1',
-    });
+    };
+
+    // Finish work before starting new work: review stages first.
+    for (const { task } of scheduleReviews(config.governor, {
+      ...base,
+      reviewModel: reviewModelGuess,
+      reviewCostPct: REVIEW_COST_PCT,
+      runningProjects: new Set(reviewing.values()),
+    })) {
+      const project = projects.find((p) => p.id === task.projectId)!;
+      console.log(`Reviewing ${task.id} (PR #${task.prNumber})`);
+      const p = runReviewStage(app, project, task)
+        .then((outcome) => console.log(`Review stage for ${task.id}: ${outcome}`))
+        .catch((e: Error) => {
+          console.error(`Review stage for ${task.id} crashed: ${e.stack ?? e.message}`);
+          store.event('review.crash', task.id, { error: e.message });
+          // Retry later; repeated crashes are counted and park the task.
+          try {
+            const t = store.task(task.id);
+            if (t && t.state === 'merging') store.transition(task.id, 'in_review');
+            const n = (t?.interruptions ?? 0) + 1;
+            if (n >= 5 && t) {
+              store.transition(task.id, 'parked', { interruptions: n, lastFailure: `Review stage error: ${e.message}` });
+              void app.notify('alert', `Parked ${task.id} after repeated review-stage errors: ${e.message}`);
+            } else {
+              store.db.prepare('UPDATE tasks SET interruptions = ?, not_before = ? WHERE id = ?').run(n, app.now() + 300 * n, task.id);
+            }
+          } catch (inner) {
+            console.error(`Could not record the error for ${task.id}: ${(inner as Error).message}`);
+          }
+        })
+        .finally(() => {
+          running.delete(task.id);
+          reviewing.delete(task.id);
+        });
+      running.set(task.id, p);
+      reviewing.set(task.id, task.projectId);
+      base.runningTaskIds.add(task.id);
+    }
+
+    const out = schedule(config.governor, base);
 
     for (const { task, model } of out.picks) {
       const project = projects.find((p) => p.id === task.projectId)!;

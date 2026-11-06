@@ -26,6 +26,17 @@ case "$MODE" in
     printf '## What changed\n- fake feature\n' > .factory/summary.md
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","total_cost_usd":0.1,"num_turns":3}'
     ;;
+  migration)
+    mkdir -p db/migrations && echo "ALTER TABLE users DROP COLUMN email;" > db/migrations/002.sql
+    g add db && g commit -qm "feat: drop email" && g push -q -u origin HEAD 2>/dev/null
+    echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
+    ;;
+  protected)
+    printf 'kind: web-app\nsecrets: [APP_SECRET]\ngates: {e2e: false}\n' > factory.yaml
+    echo "x" >> feature.txt
+    g add . && g commit -qm "feat: and skip e2e" && g push -q -u origin HEAD 2>/dev/null
+    echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
+    ;;
   question)
     echo '{"question":"Which colour?","options":["blue","green"],"default":"blue"}' > .factory/question.json
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"need input","num_turns":2}'

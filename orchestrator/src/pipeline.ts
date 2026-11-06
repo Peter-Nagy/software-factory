@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { buildClaudeArgs } from './claude.ts';
 import { parseProjectConfig, type FactoryConfig, type ProjectConfig } from './config.ts';
 import type { Store } from './db.ts';
-import type { GitHub } from './github.ts';
+import type { GitHub, RepoPermissions } from './github.ts';
 import { nextStep } from './retry.ts';
 import { promptPath, roleConfig } from './roles.ts';
 import { runInContainer } from './runner/container.ts';
@@ -17,8 +17,8 @@ export interface PipelineContext {
   config: FactoryConfig;
   store: Store;
   secrets: Secrets;
-  /** GitHub client + raw token scoped to one repo (minted per task by the orchestrator). */
-  repoAccess(project: Project): Promise<{ gh: GitHub; token: string }>;
+  /** GitHub client + raw token scoped to one repo (minted per task). Default permissions: a worker's. */
+  repoAccess(project: Project, permissions?: RepoPermissions): Promise<{ gh: GitHub; token: string }>;
   now(): number;
   /** Clone URL override (tests); defaults to https://github.com/<owner>/<repo>.git */
   remoteUrl?(project: Project): string;

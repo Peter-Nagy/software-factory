@@ -49,7 +49,7 @@ export async function createApp(config: FactoryConfig = loadFactoryConfig()): Pr
     store,
     secrets,
     repoClient,
-    repoAccess: (project) => repoClient(project),
+    repoAccess: (project, permissions) => repoClient(project, permissions),
     now: () => Math.floor(Date.now() / 1000),
     // Discord arrives in M4; until then notifications are events + stdout (visible in the launchd log).
     notify: async (kind, text) => {
@@ -89,6 +89,10 @@ export function recoverInterrupted(app: App): string[] {
         pendingMode: 'resume',
         fixRounds: t.state === 'fixing' ? Math.max(t.fixRounds - 1, 0) : t.fixRounds,
       });
+      recovered.push(t.id);
+    }
+    if (t.state === 'merging') {
+      app.store.transition(t.id, 'in_review'); // the merge is guarded by sha, so checking again is safe
       recovered.push(t.id);
     }
   }

@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -108,4 +108,26 @@ export async function hasUnpushedCommits(dir: string, branch: string, base = 'ma
   const remote = await git(dir, 'branch', '-r', '--list', `origin/${branch}`);
   const range = remote ? `origin/${branch}..${branch}` : `origin/${base}..${branch}`;
   return Number(await git(dir, 'rev-list', '--count', range)) > 0;
+}
+
+/**
+ * Stable id of the branch's own change (independent of where it sits on main), so syncing with main doesn't
+ * force a new review of an unchanged diff.
+ */
+export async function changePatchId(dir: string, base = 'main'): Promise<string> {
+  const mergeBase = await git(dir, 'merge-base', `origin/${base}`, 'HEAD');
+  const diff = await git(dir, 'diff', mergeBase, 'HEAD');
+  if (!diff) return 'empty';
+  const out = spawnSync('git', ['patch-id', '--stable'], { cwd: dir, input: diff + '\n', encoding: 'utf8' });
+  return (out.stdout ?? '').split(' ')[0] || 'unknown';
+}
+
+/** True if origin/<base> is already contained in HEAD. */
+export async function containsBase(dir: string, base = 'main'): Promise<boolean> {
+  try {
+    await git(dir, 'merge-base', '--is-ancestor', `origin/${base}`, 'HEAD');
+    return true;
+  } catch {
+    return false;
+  }
 }

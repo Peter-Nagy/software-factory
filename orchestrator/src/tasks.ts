@@ -9,10 +9,12 @@ export const TRANSITIONS: Record<TaskState, readonly TaskState[]> = {
   in_review: ['merging', 'fixing', 'blocked', 'parked', 'queued', 'cancelled'],
   fixing: ['in_review', 'blocked', 'parked', 'queued', 'cancelled'],
   // merging -> fixing = rebase conflict or a check failed after rebase
-  merging: ['deploying', 'done', 'fixing', 'blocked', 'parked'],
+  // merging -> in_review = main moved or the PR changed since the checks ran; check again
+  merging: ['deploying', 'done', 'in_review', 'fixing', 'blocked', 'parked'],
   // deploying -> fixing = smoke test failed, change reverted, task reopened
   deploying: ['done', 'fixing', 'parked'],
-  blocked: ['queued', 'cancelled', 'parked'],
+  // blocked -> in_review = the owner approved a destructive migration
+  blocked: ['queued', 'in_review', 'cancelled', 'parked'],
   parked: ['queued', 'cancelled'],
   done: [],
   cancelled: [],

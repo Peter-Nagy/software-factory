@@ -10,6 +10,7 @@ export interface ClaudeRunOptions {
   appendSystemPromptFile?: string;
   settingsPath?: string;
   jsonSchema?: object;
+  disallowedTools?: string[];
 }
 
 /**
@@ -38,6 +39,7 @@ export function buildClaudeArgs(o: ClaudeRunOptions): string[] {
   if (o.appendSystemPromptFile) args.push('--append-system-prompt-file', o.appendSystemPromptFile);
   if (o.settingsPath) args.push('--settings', o.settingsPath);
   if (o.jsonSchema) args.push('--json-schema', JSON.stringify(o.jsonSchema));
+  if (o.disallowedTools?.length) args.push('--disallowedTools', o.disallowedTools.join(','));
   return args;
 }
 

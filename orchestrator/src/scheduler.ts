@@ -116,3 +116,38 @@ export function schedule(cfg: GovernorConfig, input: SchedulerInput): SchedulerO
 
   return { picks, skipped, wakeAt };
 }
+
+/**
+ * Pick tasks whose PR is ready for the review stage (gates, reviewer, merge). Finishing work goes before starting
+ * new work, so the loop calls this before schedule(). One review stage per project at a time keeps merges serial.
+ */
+export function scheduleReviews(
+  cfg: GovernorConfig,
+  input: SchedulerInput & { reviewModel: (t: Task) => Model; reviewCostPct: number; runningProjects: Set<string> },
+): Pick[] {
+  const inFlight = input.tasks.filter((t) => input.runningTaskIds.has(t.id)).map((t) => ({ estimatedCostPct: t.estimatedCostPct }));
+  const busyProjects = new Set(input.runningProjects);
+  const picks: Pick[] = [];
+  const candidates = input.tasks
+    .filter((t) => t.state === 'in_review' && !input.runningTaskIds.has(t.id) && input.activeProjects.has(t.projectId))
+    .filter((t) => t.notBefore === null || t.notBefore <= input.now)
+    .sort((a, b) => b.priority - a.priority || a.updatedAt - b.updatedAt);
+  for (const task of candidates) {
+    if (busyProjects.has(task.projectId)) continue;
+    const model = input.reviewModel(task);
+    const d = decide(cfg, {
+      now: input.now,
+      usage: input.usage,
+      model,
+      estimatedCostPct: input.reviewCostPct,
+      running: inFlight,
+      pausedUntil: input.pausedUntil,
+      ownUseDetected: input.ownUseDetected,
+    });
+    if (!d.allow) continue;
+    picks.push({ task, model });
+    inFlight.push({ estimatedCostPct: input.reviewCostPct });
+    busyProjects.add(task.projectId);
+  }
+  return picks;
+}
