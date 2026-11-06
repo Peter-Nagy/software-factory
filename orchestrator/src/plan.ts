@@ -11,12 +11,15 @@ import type { Model, Project, ProjectKind } from './types.ts';
 import { snapshotAfterRun } from './usage.ts';
 
 export type PlanTarget = 'new' | 'existing';
+/** change = features or fixes; goals = iterate on the project's goals (docs/PRODUCT.md), issues optional. */
+export type PlanFocus = 'change' | 'goals';
 export type PlanState = 'drafting' | 'thinking' | 'executing' | 'executed' | 'failed' | 'archived';
 
 export interface Plan {
   id: number;
   title: string;
   target: PlanTarget;
+  focus: PlanFocus;
   projectId: string | null;
   state: PlanState;
   model: Model;
@@ -60,7 +63,7 @@ export const PlanFileSchema = z.object({
       priority: z.number().int().min(1).max(5).default(3),
     })
     .optional(),
-  issues: z.array(PlanIssueSchema).min(1).max(40),
+  issues: z.array(PlanIssueSchema).max(40).default([]),
 });
 export type PlanFile = z.infer<typeof PlanFileSchema>;
 export type PlanIssue = z.infer<typeof PlanIssueSchema>;
@@ -70,6 +73,7 @@ const toPlan = (r: Row): Plan => ({
   id: Number(r.id),
   title: String(r.title),
   target: r.target as PlanTarget,
+  focus: ((r.focus as string | undefined) ?? 'change') as PlanFocus,
   projectId: (r.project_id as string | null) ?? null,
   state: r.state as PlanState,
   model: r.model as Model,
@@ -115,11 +119,12 @@ function update(ctx: Pick<PipelineContext, 'store' | 'now'>, id: number, patch: 
     .run(patch.state ?? cur.state, patch.sessionId === undefined ? cur.sessionId : patch.sessionId, JSON.stringify(patch.result ?? cur.result), patch.title ?? cur.title, patch.model ?? cur.model, ctx.now(), id);
 }
 
-export function createPlan(ctx: PipelineContext, p: { title: string; target: PlanTarget; projectId?: string | null; model?: Model }): Plan {
+export function createPlan(ctx: PipelineContext, p: { title: string; target: PlanTarget; projectId?: string | null; model?: Model; focus?: PlanFocus }): Plan {
   if (p.target === 'existing' && !ctx.store.projects().some((x) => x.id === p.projectId)) throw new Error(`Unknown project ${p.projectId}`);
+  const focus: PlanFocus = p.target === 'existing' && p.focus === 'goals' ? 'goals' : 'change';
   const r = ctx.store.db
-    .prepare('INSERT INTO plans (title, target, project_id, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(p.title.slice(0, 100), p.target, p.target === 'existing' ? p.projectId! : null, p.model ?? 'opus', ctx.now(), ctx.now());
+    .prepare('INSERT INTO plans (title, target, focus, project_id, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(p.title.slice(0, 100), p.target, focus, p.target === 'existing' ? p.projectId! : null, p.model ?? 'opus', ctx.now(), ctx.now());
   const id = Number(r.lastInsertRowid);
   mkdirSync(join(planDir(ctx, id), 'work', 'plan'), { recursive: true });
   mkdirSync(join(planDir(ctx, id), 'sessions'), { recursive: true });
@@ -164,6 +169,7 @@ export function readPlanFiles(ctx: Pick<PipelineContext, 'config'>, plan: Plan):
 export function validatePlan(p: PlanFile, target: PlanTarget): string[] {
   const errors: string[] = [];
   if (target === 'new' && !p.project) errors.push('A new-project plan needs "project" (name, kind).');
+  if (target === 'new' && p.issues.length === 0) errors.push('A new project needs at least the scaffold issue.');
   const keys = new Set<string>();
   for (const i of p.issues) {
     if (keys.has(i.key)) errors.push(`Duplicate issue key "${i.key}".`);
@@ -229,7 +235,13 @@ export async function planTurn(ctx: PipelineContext, id: number, text: string): 
       ? [
           plan.target === 'new'
             ? `The owner wants to plan a new project: "${plan.title}".`
-            : `The owner wants to plan a change to the existing project ${plan.projectId} (code in /work/repo): "${plan.title}".`,
+            : plan.focus === 'goals'
+              ? [
+                  `The owner wants to iterate on the goals of the project ${plan.projectId} (code in /work/repo): "${plan.title}".`,
+                  'Start /work/plan/PRODUCT.md as a copy of /work/repo/docs/PRODUCT.md (if there is one) and revise it as you discuss.',
+                  'Add issues to plan.json only for work the revised goals need now; none is fine.',
+                ].join('\n')
+              : `The owner wants to plan a change to the existing project ${plan.projectId} (code in /work/repo): "${plan.title}".`,
           'Start PRODUCT.md and plan.json in /work/plan right away from what you know, then discuss.',
           '',
           `Owner: ${text}`,
@@ -364,23 +376,38 @@ export async function executePlan(ctx: PipelineContext, deps: ExecuteDeps, id: n
     }
     const { gh } = await deps.repoClient(project);
 
+    // For existing projects, a changed spec becomes an issue like any other change: it goes through the checks,
+    // review and merge, so main is never edited directly.
+    const currentProduct = plan.target === 'existing' ? readRepoProduct(ctx, plan) : null;
+    const specChanged = plan.target === 'existing' && normalise(currentProduct ?? '') !== normalise(files.product);
+    if (plan.target === 'existing' && !specChanged && pf.issues.length === 0) throw new Error('Nothing to execute: the spec is unchanged and there are no issues.');
+
     // 2. Labels, including each area used.
     const areas = [...new Set(pf.issues.map((i) => i.area).filter((a): a is string => Boolean(a)))];
+    if (specChanged) areas.push('docs');
     await gh.ensureLabels(project.owner, project.id, [...FACTORY_LABELS, ...areas.map((a) => ({ name: `area:${a}`, color: 'bfdadc' }))]);
 
     // 3. The tracking issue carries the spec (no factory:ready: nobody builds it).
     if (!result.trackingIssue) {
-      const t = await gh.createIssue(project.owner, project.id, { title: `Plan: ${pf.title}`, body: `${files.product}\n\n_Planned on the factory dashboard (plan ${id})._`, labels: ['factory:plan'] });
+      const t = await gh.createIssue(project.owner, project.id, { title: `${plan.focus === 'goals' ? 'Goals' : 'Plan'}: ${pf.title}`, body: `${files.product}\n\n_Planned on the factory dashboard (plan ${id})._`, labels: ['factory:plan'] });
       result.trackingIssue = t.number;
       save();
     }
 
-    // 4. Issues, dependencies first, so each can name the real numbers it waits for.
+    // 4a. The spec update comes first; the other issues build on it.
+    if (specChanged && !result.issues[SPEC_ISSUE_KEY]) {
+      const created = await gh.createIssue(project.owner, project.id, specIssue(result.trackingIssue, currentProduct !== null, project.priority));
+      result.issues[SPEC_ISSUE_KEY] = created.number;
+      save();
+    }
+    const specDep = result.issues[SPEC_ISSUE_KEY] ? [result.issues[SPEC_ISSUE_KEY]] : [];
+
+    // 4b. Issues, dependencies first, so each can name the real numbers it waits for.
     for (const issue of topoOrder(pf.issues)!) {
       if (result.issues[issue.key]) continue;
       const created = await gh.createIssue(project.owner, project.id, {
         title: issue.title,
-        body: issueBody(issue, result.trackingIssue, issue.dependsOn.map((d) => result.issues[d]!)),
+        body: issueBody(issue, result.trackingIssue, [...specDep, ...issue.dependsOn.map((d) => result.issues[d]!)]),
         labels: issueLabels(issue, project.priority),
       });
       result.issues[issue.key] = created.number;
@@ -395,6 +422,34 @@ export async function executePlan(ctx: PipelineContext, deps: ExecuteDeps, id: n
     addMessage(ctx, id, 'system', `Execution stopped: ${result.error}. Fix the cause and press Execute again; finished steps are skipped.`);
     throw e;
   }
+}
+
+export const SPEC_ISSUE_KEY = 'spec-update';
+
+/** The issue that writes the revised spec into the repo. */
+export function specIssue(trackingIssue: number, hadSpec: boolean, priority: number) {
+  return {
+    title: hadSpec ? 'Update docs/PRODUCT.md to the revised goals' : 'Add docs/PRODUCT.md with the project goals',
+    body: [
+      `${hadSpec ? 'Replace' : 'Create'} \`docs/PRODUCT.md\` with the spec in #${trackingIssue}: copy the issue body exactly, without its last line ("Planned on the factory dashboard").`,
+      'Change nothing else.',
+      '',
+      '## Acceptance criteria',
+      `- [ ] \`docs/PRODUCT.md\` matches the spec in #${trackingIssue}`,
+      '- [ ] No other files change',
+      '',
+      `Part of the plan in #${trackingIssue}.`,
+    ].join('\n'),
+    labels: ['factory:ready', 'size:s', 'risk:low', `priority:${priority}`, 'area:docs'],
+  };
+}
+
+const normalise = (t: string) => t.replace(/\r\n/g, '\n').trim();
+
+/** docs/PRODUCT.md as it was on main when the planner last looked (its clone sits next to the plan). */
+function readRepoProduct(ctx: Pick<PipelineContext, 'config'>, plan: Plan): string | null {
+  const p = join(planDir(ctx, plan.id), 'repo', 'docs', 'PRODUCT.md');
+  return existsSync(p) ? readFileSync(p, 'utf8') : null;
 }
 
 /** Clients for executePlan in production: a token from the GitHub App, retried while a new repo becomes visible to it. */

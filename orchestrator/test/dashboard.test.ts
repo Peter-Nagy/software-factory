@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -133,7 +133,11 @@ test('execute: new project gets a repo, labels, a spec issue and ordered issues;
 
 async function serve() {
   const s = setup();
-  const server = await startDashboard(s.ctx, { createRepo: s.createRepo, log: () => undefined });
+  const dist = join(s.root, 'dist');
+  mkdirSync(join(dist, 'assets'), { recursive: true });
+  writeFileSync(join(dist, 'index.html'), '<!doctype html><title>Software Factory</title><div id="root"></div>');
+  writeFileSync(join(dist, 'assets', 'app-abc.js'), 'console.log(1)');
+  const server = await startDashboard(s.ctx, { createRepo: s.createRepo, log: () => undefined, distDir: dist });
   const port = (server.address() as AddressInfo).port;
   const token = dashboardToken(s.ctx);
   const call = (path: string, init: RequestInit & { host?: string } = {}) =>
@@ -156,7 +160,14 @@ test('dashboard: nothing works without the login cookie; the login link sets it'
     assert.equal(state.projects[0]!.id, 'app');
     const page = await d.call('/', { headers: { cookie: jar } });
     assert.match(await page.text(), /Software Factory/);
-    assert.match(page.headers.get('content-security-policy')!, /frame-ancestors 'none'/);
+    assert.match(page.headers.get('content-security-policy')!, /script-src 'self';.*frame-ancestors 'none'/);
+    // client-side routes fall back to the app; assets are served (and cached) without a session
+    assert.match(await (await d.call('/projects/app', { headers: { cookie: jar } })).text(), /Software Factory/);
+    const asset = await d.call('/assets/app-abc.js');
+    assert.equal(asset.status, 200);
+    assert.match(asset.headers.get('cache-control')!, /immutable/);
+    assert.equal((await d.call('/projects/app')).status, 401);
+    assert.equal((await d.call('/assets/../../../etc/passwd')).status, 401); // normalised to a page: needs a session
   } finally {
     d.server.close();
   }
@@ -215,6 +226,30 @@ test('dashboard: plans over HTTP, answers and task actions', async () => {
     assert.equal((await api('POST', 'questions/123/answer', { answer: 'x' })).status, 400);
     assert.equal((await api('POST', 'nope')).status, 404);
     assert.ok(existsSync(join(d.root, 'state/plans', String(id), 'work/plan/plan.json')));
+  } finally {
+    d.server.close();
+  }
+});
+
+test('dashboard: project and task details, pausing a project', async () => {
+  const d = await serve();
+  try {
+    const jar = (await d.call(`/login?t=${d.token}`)).headers.get('set-cookie')!.split(';')[0]!;
+    const api = async (method: string, path: string, body?: object) => {
+      const r = await d.call(`/api/${path}`, { method, headers: { cookie: jar, 'x-factory': '1', 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return { status: r.status, json: (await r.json()) as any };
+    };
+    (d.gh as unknown as { readFile: unknown }).readFile = async () => '# App\n\nGoals here';
+    d.store.upsertTask({ ...(await import('../src/issues.ts')).taskFromIssue('app', 3, { number: 5, title: 'Five', body: null, labels: [] }) });
+    const p = await api('GET', 'projects/app');
+    assert.equal(p.json.product, '# App\n\nGoals here');
+    assert.deepEqual(p.json.tasks.map((t: { id: string }) => t.id), ['app#5']);
+    assert.equal((await api('POST', 'projects/app/state', { state: 'paused' })).status, 200);
+    assert.equal(d.store.projects()[0]!.state, 'paused');
+    assert.equal((await api('POST', 'projects/app/state', { state: 'archived' })).status, 400);
+    const t = await api('GET', `tasks/${encodeURIComponent('app#5')}`);
+    assert.equal(t.json.task.title, 'Five');
   } finally {
     d.server.close();
   }

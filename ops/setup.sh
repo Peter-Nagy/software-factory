@@ -64,6 +64,9 @@ step "Node dependencies"
 (cd "$REPO_DIR" && npm install --no-fund --no-audit)
 (cd "$REPO_DIR" && npm test >/dev/null && echo "Unit tests pass.")
 
+step "Dashboard"
+(cd "$REPO_DIR/dashboard" && npm ci --no-fund --no-audit && npm run build >/dev/null && echo "Dashboard built.")
+
 step "Worker image"
 if ! docker info >/dev/null 2>&1; then
   open -a "$DOCKER_APP" || true

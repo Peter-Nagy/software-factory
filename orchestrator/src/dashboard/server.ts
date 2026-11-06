@@ -1,5 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { extname, join, normalize, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { statusText } from '../discord/bot.ts';
 import { weeklyBurnLine } from '../governor.ts';
@@ -26,7 +28,12 @@ export interface DashboardContext extends PipelineContext {
   repoClient(project: Project, permissions?: RepoPermissions): Promise<{ gh: GitHub; token: string }>;
 }
 
-const PAGE = new URL('./page.html', import.meta.url);
+/** The built React app (dashboard/: npm run build). */
+export const DIST = fileURLToPath(new URL('../../../dashboard/dist/', import.meta.url));
+const TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
+};
 const COOKIE = 'factory_session';
 
 /**
@@ -136,6 +143,8 @@ export function dashboardState(ctx: DashboardContext) {
 
 export interface DashboardOptions {
   createRepo: RepoCreator;
+  /** Built app folder (default: dashboard/dist). */
+  distDir?: string;
   log?: (m: string) => void;
 }
 
@@ -144,6 +153,22 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
   const token = dashboardToken(ctx);
   const background = new Map<number, Promise<unknown>>(); // plan id -> running turn or execution
   const log = opts.log ?? ((m: string) => console.log(`[dashboard] ${m}`));
+  const dist = opts.distDir ?? DIST;
+
+  // docs/PRODUCT.md per project, read from main with a read-only token, cached for a minute.
+  const productCache = new Map<string, { at: number; text: string | null }>();
+  const productFor = async (project: Project): Promise<string | null> => {
+    const hit = productCache.get(project.id);
+    if (hit && ctx.now() - hit.at < 60) return hit.text;
+    try {
+      const { gh } = await ctx.repoClient(project, { contents: 'read', metadata: 'read' });
+      const text = await gh.readFile(project.owner, project.id, 'docs/PRODUCT.md');
+      productCache.set(project.id, { at: ctx.now(), text });
+      return text;
+    } catch {
+      return hit?.text ?? null;
+    }
+  };
 
   const runInBackground = (planId: number, work: () => Promise<unknown>) => {
     if (background.has(planId)) throw new HttpError(409, 'The planner is still working on this plan');
@@ -156,17 +181,17 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
   const handler = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const send = (status: number, body: unknown, headers: Record<string, string> = {}) => {
-      const json = typeof body !== 'string';
+      const json = typeof body !== 'string' && !Buffer.isBuffer(body);
       res.writeHead(status, {
         'Content-Type': json ? 'application/json; charset=utf-8' : 'text/html; charset=utf-8',
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'DENY',
         'Referrer-Policy': 'no-referrer',
-        'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         ...headers,
       });
-      res.end(json ? JSON.stringify(body) : body);
+      res.end(json ? JSON.stringify(body) : (body as string | Buffer));
     };
 
     if (!hostAllowed(req.headers.host, allowedHosts)) return send(421, { error: 'Unknown host' });
@@ -181,11 +206,17 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
     }
 
     const authed = same(cookies(req)[COOKIE] ?? '', token);
-    if (url.pathname === '/' || url.pathname === '/index.html') {
-      if (!authed) return send(401, '<!doctype html><meta name="viewport" content="width=device-width"><p style="font:16px system-ui;margin:2em">Open the login link from <code>factory dashboard-url</code> on the Mac.</p>');
-      return send(200, readFileSync(PAGE, 'utf8'));
+    if (!url.pathname.startsWith('/api/')) {
+      // The app: hashed assets are public (no data in them); every page needs the session.
+      const isAsset = url.pathname.startsWith('/assets/') || /\.(svg|png|ico|woff2|webmanifest)$/.test(url.pathname);
+      if (!isAsset && !authed) return send(401, '<!doctype html><meta name="viewport" content="width=device-width"><p style="font:16px system-ui;margin:2em">Open the login link from <code>factory dashboard-url</code> on the Mac.</p>');
+      if (!existsSync(join(dist, 'index.html'))) return send(503, '<!doctype html><p style="font:16px system-ui;margin:2em">The dashboard isn\'t built yet: run <code>npm run build</code> in <code>dashboard/</code>.</p>');
+      const file = normalize(join(dist, decodeURIComponent(url.pathname)));
+      const inside = file.startsWith(dist.endsWith(sep) ? dist : dist + sep);
+      const target = inside && existsSync(file) && statSync(file).isFile() ? file : join(dist, 'index.html'); // SPA fallback
+      const immutable = target.includes(`${sep}assets${sep}`);
+      return send(200, readFileSync(target), { 'Content-Type': TYPES[extname(target)] ?? 'application/octet-stream', 'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-store' });
     }
-    if (!url.pathname.startsWith('/api/')) return send(404, { error: 'Not found' });
     if (!authed) return send(401, { error: 'Not logged in' });
     if (req.method !== 'GET' && req.headers['x-factory'] !== '1') return send(403, { error: 'Missing X-Factory header' });
 
@@ -237,6 +268,37 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
         if (!r.ok) throw new HttpError(400, r.reason);
         return r;
       }
+      case 'GET projects/:id': {
+        const project = store.projects().find((x) => x.id === id);
+        if (!project) throw new HttpError(404, `No project ${id}`);
+        const tasks = (store.db.prepare(`SELECT id FROM tasks WHERE project_id = ? AND (state NOT IN ('done', 'cancelled') OR updated_at >= ?) ORDER BY updated_at DESC`).all(id, ctx.now() - 30 * 86400) as { id: string }[]).map((r) => store.task(r.id)!);
+        return {
+          project,
+          tasks,
+          product: await productFor(project),
+          plans: listPlans(ctx).filter((pl) => pl.projectId === id),
+          questions: openQuestions(ctx).filter((q) => q.projectId === id),
+          merged30d: Number((store.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND state = 'done' AND updated_at >= ?`).get(id, ctx.now() - 30 * 86400) as { n: number }).n),
+        };
+      }
+      case 'POST projects/:id/state': {
+        const project = store.projects().find((x) => x.id === id);
+        if (!project) throw new HttpError(404, `No project ${id}`);
+        if (body.state !== 'active' && body.state !== 'paused') throw new HttpError(400, 'state must be active or paused');
+        store.setProjectState(id, body.state);
+        productCache.delete(id);
+        return;
+      }
+      case 'GET tasks/:id': {
+        const task = store.task(id);
+        if (!task) throw new HttpError(404, `No task ${id}`);
+        return {
+          task,
+          runs: store.db.prepare('SELECT id, role, model, started_at, finished_at, ok, cost_usd, num_turns, summary FROM runs WHERE task_id = ? ORDER BY id DESC LIMIT 30').all(id),
+          events: store.db.prepare('SELECT at, kind, data FROM events WHERE task_id = ? ORDER BY id DESC LIMIT 50').all(id),
+          questions: store.db.prepare('SELECT id, kind, question, answer, answered_by, asked_at FROM questions WHERE task_id = ? ORDER BY id DESC').all(id),
+        };
+      }
       case 'POST projects/:id/tasks': {
         const project = store.projects().find((x) => x.id === id);
         if (!project) throw new HttpError(404, `No project ${id}`);
@@ -251,7 +313,7 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
       case 'POST plans': {
         const target = body.target === 'existing' ? 'existing' : 'new';
         const model: Model = body.model === 'sonnet' ? 'sonnet' : 'opus';
-        const plan = createPlan(ctx, { title: str(body.title, 'title', 100), target, projectId: target === 'existing' ? str(body.projectId, 'projectId') : null, model });
+        const plan = createPlan(ctx, { title: str(body.title, 'title', 100), target, projectId: target === 'existing' ? str(body.projectId, 'projectId') : null, model, focus: body.focus === 'goals' ? 'goals' : 'change' });
         const first = typeof body.message === 'string' && body.message.trim() ? body.message.trim() : null;
         if (first) runInBackground(plan.id, () => planTurn(ctx, plan.id, first.slice(0, 20_000)));
         return getPlan(ctx, plan.id);

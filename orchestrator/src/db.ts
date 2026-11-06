@@ -114,6 +114,8 @@ const MIGRATIONS: string[] = [
      text TEXT NOT NULL,
      at INTEGER NOT NULL
    );`,
+  // v4: a plan's focus: a change (features, fixes) or the project's goals (docs/PRODUCT.md)
+  `ALTER TABLE plans ADD COLUMN focus TEXT NOT NULL DEFAULT 'change';`,
 ];
 
 type Row = Record<string, unknown>;

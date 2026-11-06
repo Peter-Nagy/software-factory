@@ -1,0 +1,50 @@
+// Types mirror the orchestrator's JSON (orchestrator/src/types.ts, plan.ts, questions.ts).
+
+export type TaskState = "queued" | "building" | "in_review" | "fixing" | "merging" | "deploying" | "done" | "blocked" | "parked" | "cancelled"
+export type Model = "haiku" | "sonnet" | "opus"
+
+export interface Project { id: string; owner: string; kind: string; state: "spec_pending" | "awaiting_approval" | "active" | "paused" | "archived"; priority: number; createdAt: number }
+export interface Task {
+  id: string; projectId: string; issueNumber: number; title: string; state: TaskState; priority: number; risk: "low" | "medium" | "high"
+  area: string | null; dependsOn: string[]; attempt: number; fixRounds: number; branch: string | null; prNumber: number | null
+  lastFailure: string | null; interruptions: number; pendingMode: "build" | "fix" | "resume"; createdAt: number; updatedAt: number
+}
+export interface Usage { fiveHourPct: number | null; fiveHourResetsAt: number | null; sevenDayPct: number | null; sevenDayResetsAt: number | null; source: string; takenAt: number }
+export interface Question { id: number; kind: "product" | "migration"; taskId: string | null; projectId: string | null; question: string; options: string[]; defaultOption: string | null; askedAt: number; timeoutAt: number }
+export interface Plan { id: number; title: string; target: "new" | "existing"; focus: "change" | "goals"; projectId: string | null; state: "drafting" | "thinking" | "executing" | "executed" | "failed" | "archived"; model: Model; result: { repoCreated?: string; trackingIssue?: number; issues: Record<string, number>; error?: string } | null; createdAt: number; updatedAt: number }
+export interface PlanIssue { key: string; title: string; body: string; size: "s" | "m" | "l"; risk: "low" | "medium" | "high"; area?: string; dependsOn: string[] }
+export interface PlanDetail {
+  plan: Plan
+  messages: { id: number; role: "owner" | "planner" | "system"; text: string; at: number }[]
+  files: { product: string | null; plan: { title: string; project?: { name: string; kind: string; priority: number }; issues: PlanIssue[] } | null; errors: string[] }
+  busy: boolean
+}
+export interface Run { id: number; task_id: string | null; role: string; model: string; started_at: number; finished_at: number | null; ok: number | null; cost_usd: number | null; num_turns: number | null; summary: string | null }
+export interface FactoryState {
+  now: number; owner: string; timezone: string; usage: Usage | null; burnLine: number | null
+  governor: { opusMaxFiveHourPct: number; anyMaxFiveHourPct: number }; pausedUntil: number | null
+  projects: Project[]; tasks: Task[]; questions: Question[]; plans: Plan[]; runs: Run[]
+  spend: { role: string; model: string; runs: number; usd: number }[]
+  events: { at: number; kind: string; task_id: string | null; data: string }[]
+}
+export interface ProjectDetail { project: Project; tasks: Task[]; product: string | null; plans: Plan[]; questions: Question[]; merged30d: number }
+export interface TaskDetail { task: Task; runs: Run[]; events: { at: number; kind: string; data: string }[]; questions: { id: number; kind: string; question: string; answer: string | null; answered_by: string | null; asked_at: number }[] }
+
+export class ApiError extends Error {}
+
+export async function api<T = unknown>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`/api/${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", "X-Factory": "1" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (res.status === 401) {
+    window.location.reload()
+    throw new ApiError("Not logged in")
+  }
+  if (!res.ok) throw new ApiError((data as { error?: string }).error ?? `HTTP ${res.status}`)
+  return data as T
+}
+
+export const enc = encodeURIComponent

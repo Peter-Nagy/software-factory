@@ -116,6 +116,16 @@ export class GitHub {
     ).then((prs) => prs[0] ?? null);
   }
 
+  /** A file's text on the default branch, or null if it doesn't exist. */
+  async readFile(owner: string, repo: string, path: string): Promise<string | null> {
+    const res = await this.fetchImpl(`${API}/repos/${owner}/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`, {
+      headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.raw+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'software-factory' },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new GitHubError(res.status, `GET contents/${path} -> ${res.status}`);
+    return res.text();
+  }
+
   /** Create labels that don't exist yet (422 = already there). */
   async ensureLabels(owner: string, repo: string, labels: { name: string; color: string }[]): Promise<void> {
     for (const l of labels) {
