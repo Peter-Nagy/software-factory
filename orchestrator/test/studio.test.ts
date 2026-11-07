@@ -69,7 +69,7 @@ test('studio, guided: phases open in order, approval unlocks the next, spikes sk
   assert.equal(s.states(st.id).brief, 'drafting');
   assert.deepEqual(studioMessages(s.ctx, st.id, 'brief').map((m) => m.role), ['owner', 'agent']);
   const args = readFileSync(join(studioWork(s.ctx, st.id), '..', 'args-brief'), 'utf8');
-  assert.match(args, /--model sonnet[\s\S]*prompts\/studio\.md/);
+  assert.match(args, /--model opus[\s\S]*prompts\/studio\.md/);
   assert.match(args, /You own the Brief phase[\s\S]*status\/brief\.json/);
 
   for (const phase of ['brief', 'research', 'product', 'design'] as PhaseKey[]) {

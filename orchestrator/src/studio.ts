@@ -31,8 +31,8 @@ export interface PhaseDef {
 }
 
 export const PHASES: PhaseDef[] = [
-  { key: 'brief', title: 'Brief', model: 'sonnet', doc: 'docs/BRIEF.md', costPct: 2 },
-  { key: 'research', title: 'Research', model: 'sonnet', doc: 'docs/RESEARCH.md', costPct: 6 },
+  { key: 'brief', title: 'Brief', model: 'opus', doc: 'docs/BRIEF.md', costPct: 4 },
+  { key: 'research', title: 'Research', model: 'opus', doc: 'docs/RESEARCH.md', costPct: 10 },
   { key: 'product', title: 'Product', model: 'opus', doc: 'docs/PRODUCT.md', costPct: 5 },
   { key: 'design', title: 'Design', model: 'opus', doc: 'docs/DESIGN.md', costPct: 8 },
   { key: 'architecture', title: 'Architecture', model: 'opus', doc: 'docs/ARCHITECTURE.md', costPct: 5 },

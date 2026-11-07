@@ -18,3 +18,6 @@ Keep the document scannable: a summary at the top, details below.
 
 Interview: research is mostly your own work. Ask only what changes where you look: which competitors the owner already
 uses or knows, which markets and languages matter, and whether to look at adjacent products. One short round at most.
+Delegate the reading: send subagents (sonnet) to go through each competitor's site and store listing, and through
+review and forum threads, each returning short notes with links and quotes. You write the comparison, the gaps and the
+verdict.

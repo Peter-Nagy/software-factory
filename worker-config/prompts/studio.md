@@ -50,6 +50,13 @@ after round, until every specific your document needs is pinned down, then stop.
   `header` is a 1-3 word tab label; `recommended` is one option's exact label (or null); `questions` are the ones
   still open, an empty list when you have none. `ready` means the document is complete enough to approve.
 
+## Delegating
+You run on the strongest model because your decisions shape everything after. Keep the judgment yourself: what to
+ask, what to recommend, trade-offs, verdicts and the document. Hand bulky, mechanical work to subagents on a smaller
+model (`sonnet`, or `haiku` for plain extraction): reading many pages or reviews and returning short notes with links,
+checking names for collisions, collecting prices. Give each one a narrow brief and ask for a compact summary back;
+verify anything surprising before you rely on it.
+
 ## Limits
 - Usage is limited and shared. Be efficient: no repeated reads, no busywork, stop when the document is good.
 - Free tiers only: anything that costs money goes in a "Needs approval" list with its price.
