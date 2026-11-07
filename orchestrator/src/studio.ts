@@ -711,3 +711,21 @@ export function reviewAnswers(ctx: Ctx, id: number, phase: PhaseKey, edits: { id
     : studioPhases(ctx, id).slice(index(phase) + 1).find((p) => p.state === 'ready' || p.state === 'stale');
   return { message: null, approved: true, next: next ? { phase: next.phase, state: next.state } : null };
 }
+
+/** Studio phases waiting on the owner: interview questions to answer, or stand-in answers to review. */
+export interface StudioWait { studioId: number; studio: string; phase: PhaseKey; phaseTitle: string; kind: 'questions' | 'review'; count: number }
+export function studioWaits(ctx: Ctx): StudioWait[] {
+  const out: StudioWait[] = [];
+  for (const studio of listStudios(ctx)) {
+    for (const p of studioPhases(ctx, studio.id)) {
+      if (p.phase === 'plan' || isBusy(studio.id, p.phase) || !['ready', 'drafting', 'stale'].includes(p.state)) continue;
+      const base = { studioId: studio.id, studio: studio.title, phase: p.phase, phaseTitle: phaseDef(p.phase).title };
+      if (p.autoAnswer === 'review') out.push({ ...base, kind: 'review', count: latestAnswers(ctx, studio.id, p.phase).length });
+      else if (p.autoAnswer === null) {
+        const n = readStatus(ctx, studio.id, p.phase)?.questions.length ?? 0;
+        if (n) out.push({ ...base, kind: 'questions', count: n });
+      }
+    }
+  }
+  return out;
+}

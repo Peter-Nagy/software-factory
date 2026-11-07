@@ -53,6 +53,7 @@ import {
   latestAnswers,
   studioMessages,
   studioPhases,
+  studioWaits,
   studioTurn,
   syncPlanPhase,
   type PhaseKey,
@@ -180,6 +181,7 @@ export function dashboardState(ctx: DashboardContext) {
     projects: store.projects(),
     tasks: [...store.openTasks(), ...recentDone].filter((t) => !TERMINAL_STATES.includes(t.state) || recentDone.includes(t)),
     questions: openQuestions(ctx),
+    studioWaits: studioWaits(ctx),
     plans: listPlans(ctx).filter((pl) => pl.focus !== 'issue'), // issue conversations live on their issue's page
     runs,
     spend,

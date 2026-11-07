@@ -24,6 +24,7 @@ export interface FactoryState {
   now: number; owner: string; timezone: string; usage: Usage | null; burnLine: number | null
   governor: { opusMaxFiveHourPct: number; anyMaxFiveHourPct: number }; pausedUntil: number | null
   projects: Project[]; tasks: Task[]; questions: Question[]; plans: Plan[]; runs: Run[]
+  studioWaits?: StudioWait[]
   spend: { role: string; model: string; runs: number; usd: number }[]
   events: { at: number; kind: string; task_id: string | null; data: string }[]
 }
@@ -96,3 +97,4 @@ export interface CostReport {
   studioPhases: (CostLine & { phase: string; model: string; perMessageUsd: number; perMessageFiveHourPct: number | null })[]
   days: { date: string; usd: number }[]
 }
+export interface StudioWait { studioId: number; studio: string; phase: PhaseKey; phaseTitle: string; kind: "questions" | "review"; count: number }

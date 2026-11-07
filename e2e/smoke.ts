@@ -128,9 +128,11 @@ await check('logged out: the app asks for the login link', async (page) => {
   await page.goto(base);
   await see(page, 'Open the login link');
 });
-await check('board: tasks by state, a parked task shows its failure', async (page) => {
+await check('board: tasks by state; the studio\'s questions and reviews are under Needs you', async (page) => {
   await see(page, 'Sign in with magic links');
   await see(page, 'Import habits from CSV');
+  await see(page, '2 questions to answer');
+  await see(page, 'Review 1 answer given for you');
 });
 await check('projects and a project page', async (page) => {
   await page.goto(`${base}/projects`);

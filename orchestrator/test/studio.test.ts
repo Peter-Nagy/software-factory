@@ -36,6 +36,7 @@ import {
   studioPhases,
   studioTurn,
   studioWork,
+  studioWaits,
   type PhaseKey,
 } from '../src/studio.ts';
 
@@ -282,6 +283,7 @@ test('studio interview: questions are structured, plain strings still work, and 
   await studioTurn(ctx, st.id, 'brief', 'Answers to your questions:\n\n> Which platforms?\nYour call');
   assert.match(prompt(), /Mode: guided[\s\S]*Answers to your questions/);
   assert.deepEqual(notes.at(-1), ['question', 'Studio "Run": the brief agent has 2 questions.']);
+  assert.deepEqual(studioWaits(ctx).map((w) => [w.phase, w.kind, w.count]), [['brief', 'questions', 2]]);
 });
 
 test('studio skip: a stand-in answers round after round, then the owner reviews; edits go back, no edits approve', async () => {
@@ -324,6 +326,7 @@ test('studio skip: a stand-in answers round after round, then the owner reviews;
   mode(st.id, 'brief', 'done');
   await autoInterview(ctx, st.id, 'brief');
   assert.deepEqual(latestAnswers(ctx, st.id, 'brief').map((a) => a.batch), [2, 2]);
+  assert.deepEqual(studioWaits(ctx).map((w) => [w.studio, w.phase, w.kind, w.count]), [['Run', 'brief', 'review', 2]]);
   assert.match(notes.at(-1)![1], /Brief answers are ready for your review \(1 round\)/);
   const ok = reviewAnswers(ctx, st.id, 'brief', []);
   assert.deepEqual(ok, { message: null, approved: true, next: { phase: 'research', state: 'ready' } });

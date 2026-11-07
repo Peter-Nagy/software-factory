@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, Hammer, ScanSearch } from "lucide-react"
+import { CheckCircle2, ChevronRight, Clock3, Hammer, MessageCircleQuestion, ScanSearch, Wand2 } from "lucide-react"
 import { useState } from "react"
 import { Board } from "@/components/board"
 import { QuestionCard } from "@/components/question-card"
@@ -6,6 +6,7 @@ import { UsageRings } from "@/components/usage"
 import { ProjectAvatar, SectionTitle } from "@/components/visual"
 import { useFactory } from "@/lib/factory"
 import { greeting } from "@/lib/format"
+import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
 export function BoardPage() {
@@ -18,7 +19,8 @@ export function BoardPage() {
   const queued = count(["queued"])
   const merged = count(["done"])
   const inFlight = building + reviewing
-  const needsYou = state.questions.length + count(["parked"])
+  const waits = state.studioWaits ?? []
+  const needsYou = state.questions.length + waits.length + count(["parked"])
 
   const chips = [
     { icon: Hammer, n: building, label: "building" },
@@ -57,10 +59,26 @@ export function BoardPage() {
         </div>
       </section>
 
-      {state.questions.length > 0 && (
+      {state.questions.length + waits.length > 0 && (
         <section>
-          <SectionTitle count={state.questions.length}>Needs you</SectionTitle>
+          <SectionTitle count={state.questions.length + waits.length}>Needs you</SectionTitle>
           <div className="grid gap-3 md:grid-cols-2">
+            {waits.map((w) => (
+              <Link key={`${w.studioId}-${w.phase}`} href={`/studio/${w.studioId}?phase=${w.phase}`}
+                className="group flex items-center gap-3 rounded-3xl border border-primary/30 bg-card p-4 text-sm shadow-elevation transition-colors hover:bg-muted/40">
+                <span className="bg-accent-gradient inline-flex size-9 shrink-0 items-center justify-center rounded-full text-white">
+                  {w.kind === "review" ? <Wand2 className="size-4" /> : <MessageCircleQuestion className="size-4" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-primary">Studio · {w.phaseTitle}</span>
+                  <span className="block truncate font-medium">{w.studio}</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {w.kind === "review" ? `Review ${w.count} answer${w.count === 1 ? "" : "s"} given for you` : `${w.count} question${w.count === 1 ? "" : "s"} to answer`}
+                  </span>
+                </span>
+                <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+              </Link>
+            ))}
             {state.questions.map((q) => <QuestionCard key={q.id} q={q} timezone={state.timezone} onDone={reload} />)}
           </div>
         </section>
