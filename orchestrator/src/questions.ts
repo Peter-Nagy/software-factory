@@ -1,7 +1,9 @@
 import type { PipelineContext } from './pipeline.ts';
 import { approveMigration, rejectMigration } from './review.ts';
 
-export type QuestionKind = 'product' | 'migration';
+/** approval: the owner signs off a held change (protected files, destructive migrations); 'migration' is the older name. */
+export type QuestionKind = 'product' | 'migration' | 'approval';
+export const isApproval = (kind: string) => kind === 'approval' || kind === 'migration';
 
 export interface Question {
   id: number;
@@ -70,7 +72,7 @@ export function answerQuestion(ctx: PipelineContext, id: number, answer: string,
   const text = answer.trim();
   if (!text) return { ok: false, reason: 'Empty answer' };
 
-  if (q.kind === 'migration') {
+  if (isApproval(q.kind)) {
     const decision = text.toLowerCase();
     if (decision !== 'approve' && decision !== 'reject') return { ok: false, reason: 'Answer approve or reject' };
     ctx.store.db.prepare('UPDATE questions SET answer = ?, answered_by = ?, answered_at = ? WHERE id = ?').run(decision, by, ctx.now(), id);
@@ -103,7 +105,7 @@ export function applyTimeouts(ctx: PipelineContext): { id: number; answer: strin
   const out: { id: number; answer: string; effect: string }[] = [];
   for (const q of openQuestions(ctx)) {
     if (q.timeoutAt > ctx.now()) continue;
-    const answer = q.kind === 'migration' ? 'reject' : q.defaultOption ?? q.options[0] ?? 'Use your best judgement and record the choice in docs/DECISIONS.md.';
+    const answer = isApproval(q.kind) ? 'reject' : q.defaultOption ?? q.options[0] ?? 'Use your best judgement and record the choice in docs/DECISIONS.md.';
     const r = answerQuestion(ctx, q.id, answer, 'timeout');
     if (r.ok) out.push({ id: q.id, answer, effect: r.effect });
   }

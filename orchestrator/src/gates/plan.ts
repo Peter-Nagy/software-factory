@@ -5,11 +5,11 @@ export { gateSteps, type GateStep, type StepName } from './contract.ts';
 import type { StepName } from './contract.ts';
 
 /**
- * Files an agent must never change: they define the gates themselves. A PR touching one waits for the owner,
- * like a destructive migration.
+ * Files that define the gates themselves and the agents' rules. A PR may change them, but it merges only after the
+ * owner signs off on exactly that change (like a destructive migration). Projects add their own in factory.yaml
+ * (`ownerApproval`).
  */
 export const PROTECTED_PATHS = [
-  '.github/workflows/**',
   '.github/CODEOWNERS',
   'factory.yaml',
   '.gitleaks.toml',
@@ -20,7 +20,10 @@ export const PROTECTED_PATHS = [
   'worker-config/**',
 ];
 
-export function protectedChanges(changedFiles: string[], patterns = PROTECTED_PATHS): string[] {
+/** CI workflows: an agent's token can't push them, so a change there always goes back to the agent. */
+export const NEVER_PATHS = ['.github/workflows/**'];
+
+export function protectedChanges(changedFiles: string[], patterns: string[] = [...NEVER_PATHS, ...PROTECTED_PATHS]): string[] {
   const res = patterns.map(globToRegExp);
   return changedFiles.filter((f) => res.some((re) => re.test(f)));
 }

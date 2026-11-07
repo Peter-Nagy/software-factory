@@ -145,6 +145,10 @@ export class GitHub {
     return this.request('POST', `/repos/${owner}/${repo}/issues/${issueNumber}/comments`, { body });
   }
 
+  addLabels(owner: string, repo: string, issueNumber: number, labels: string[]) {
+    return this.request('POST', `/repos/${owner}/${repo}/issues/${issueNumber}/labels`, { labels });
+  }
+
   setLabels(owner: string, repo: string, issueNumber: number, labels: string[]) {
     return this.request('PUT', `/repos/${owner}/${repo}/issues/${issueNumber}/labels`, { labels });
   }

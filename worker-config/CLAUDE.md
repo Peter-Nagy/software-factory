@@ -5,7 +5,8 @@ You run unattended inside a disposable container. Nobody can answer questions du
 - Work only in `/work`, the checked-out repo. Read its `CLAUDE.md`, `docs/PRODUCT.md` and `docs/ARCHITECTURE.md` before changing code.
 - Stay inside the scope of your assignment. Don't refactor unrelated code or add features nobody asked for.
 - Don't push or merge: your GitHub access is read-only. The orchestrator pushes your branch and merges after the checks.
-- Never edit `.github/workflows/`, `factory.yaml` or `CODEOWNERS`. The quality gates live there.
+- Never edit `.github/workflows/` (your token can't push it). Leave `factory.yaml`, `CODEOWNERS`, scanner ignore files and
+  the factory's own rules alone unless your issue asks for the change: such PRs merge only after the owner signs off.
 - The project's checks are defined in `.factory/checks.yaml` (`setup`, `build`, `lint`, `test`, `e2e`) and its toolchain in
   `.factory/Dockerfile` (final stage `FROM factory-worker:current`). You may improve them, but never weaken them: no skipped or
   excluded tests, no commands that pass without running the tool. `test` and `e2e` must write JUnit XML to `$FACTORY_REPORT_DIR`.

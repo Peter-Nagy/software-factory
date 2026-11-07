@@ -22,6 +22,8 @@ import {
   formatGateFailure,
   formatReviewFailure,
   gateSteps,
+  NEVER_PATHS,
+  PROTECTED_PATHS,
   protectedChanges,
   REVIEW_JSON_SCHEMA,
   ReviewSchema,
@@ -45,7 +47,7 @@ const REVIEWER_PERMISSIONS = { contents: 'read', pull_requests: 'read', issues: 
 const key = {
   gates: (id: string) => `gates:${id}`, // head sha whose checks passed
   review: (id: string) => `review:${id}`, // patch id the reviewer approved
-  approved: (id: string) => `approvedMigration:${id}`, // patch id the owner approved
+  approved: (id: string) => `approvedMigration:${id}`, // patch id the owner signed off (protected files, migrations)
   tests: (id: string) => `gateTests:${id}`, // tests the task's last green gates ran
   mainTests: (projectId: string) => `testCount:${projectId}`, // tests main ran at the last merge
 };
@@ -110,30 +112,20 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
   const files = await changedFiles(dir);
   const projectConfig = await loadProjectConfig(dir);
 
-  // 2a. Protected files: the gates' own definitions. Agents must not change them.
-  const touched = protectedChanges(files);
-  if (touched.length) {
-    await gh.setStatus(project.owner, project.id, head, { state: 'failure', context: STATUS_CONTEXTS.gates, description: 'Changes protected files' });
-    await handleFailure(ctx, task.id, task.sessionId, `This PR changes protected files that only the owner may change: ${touched.join(', ')}.\nRevert those changes (\`git checkout origin/main -- <file>\`), commit and push.`);
+  // 2a. Workflow files can't be pushed with an agent's token anyway; changes there go back.
+  const forbidden = protectedChanges(files, NEVER_PATHS);
+  if (forbidden.length) {
+    await gh.setStatus(project.owner, project.id, head, { state: 'failure', context: STATUS_CONTEXTS.gates, description: 'Changes CI workflows' });
+    await handleFailure(ctx, task.id, task.sessionId, `This PR changes CI workflow files, which only the owner may change: ${forbidden.join(', ')}.\nRevert those changes (\`git checkout origin/main -- <file>\`), commit and push.`);
     return 'fix';
   }
-
-  // 2b. Destructive migrations wait for the owner.
-  if (projectConfig.gates.destructiveMigrationCheck && store.getSetting(key.approved(task.id)) !== patchId) {
+  // 2b. What needs the owner's sign-off before merging: protected files (the gates' own definitions, the agents'
+  // rules, plus the project's ownerApproval list from main) and destructive migrations. Checked here, held after review.
+  const signOff = protectedChanges(files, [...PROTECTED_PATHS, ...projectConfig.ownerApproval]);
+  let migrations: string[] = [];
+  if (projectConfig.gates.destructiveMigrationCheck) {
     const contents = await Promise.all(files.map(async (path) => ({ path, content: await git(dir, 'show', `HEAD:${path}`).catch(() => '') })));
-    const findings = checkMigrations(contents, projectConfig.gates.migrationGlobs);
-    if (findings.length) {
-      const list = findings.map((f) => `- ${f.file}:${f.line} ${f.rule}: ${f.text}`).join('\n');
-      store.db
-        .prepare(`INSERT INTO questions (kind, task_id, project_id, question, options, default_option, asked_at, timeout_at) VALUES ('migration', ?, ?, ?, ?, ?, ?, ?)`)
-        // Never auto-approved: the default on timeout is to reject.
-        .run(task.id, project.id, `PR #${prNumber} contains destructive database changes:\n${list}\nApprove the merge?`, JSON.stringify(['approve', 'reject']), 'reject', ctx.now(), ctx.now() + 7 * 86400);
-      store.setSetting(`pendingApproval:${task.id}`, patchId);
-      store.transition(task.id, 'blocked');
-      await gh.comment(project.owner, project.id, prNumber, `Waiting for the owner's approval: this PR contains destructive database changes.\n\n${list}`);
-      await ctx.notify('question', `${task.id} (PR #${prNumber}) has destructive migrations and needs your approval:\n${list}`);
-      return 'blocked';
-    }
+    migrations = checkMigrations(contents, projectConfig.gates.migrationGlobs).map((f) => `${f.file}:${f.line} ${f.rule}: ${f.text}`);
   }
 
   // 3. Gates: the project's own checks (fail closed if any required one is missing), then the security scans.
@@ -257,6 +249,9 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
     const context = [
       ran !== null ? `The test check ran ${ran} tests${onMain !== null ? ` (main ran ${onMain})` : ''}.` : '',
       removed ? `A commit says tests were removed on purpose (${TESTS_REMOVED_TRAILER}: ${removed}). Judge whether that reason holds; if not, request changes.` : '',
+      signOff.length
+        ? `This PR changes protected files (${signOff.join(', ')}): the factory's own rules, safety checks or gates. The owner signs off after you, so review these with extra care: request changes for anything that weakens a safety layer, widens what agents may do, or isn't needed for the issue.`
+        : '',
       contractChanged.length
         ? `This PR changes the project's check definitions (${contractChanged.join(', ')}). Request changes if it weakens any check: a check that no longer tests what it did, skipped or excluded tests, lowered thresholds, a command that can pass without running the tool, or fabricated reports. Adding tools, stricter checks and fixing a broken check are fine.`
         : '',
@@ -273,6 +268,27 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
     await gh.comment(project.owner, project.id, prNumber, `**Review: approved** (${verdict.model})\n\n${verdict.text}`);
   }
   await gh.setStatus(project.owner, project.id, head, { state: 'success', context: STATUS_CONTEXTS.review, description: 'Approved' });
+
+  // 4b. The owner signs off protected changes and destructive migrations: exactly this change, after gates and review.
+  if ((signOff.length || migrations.length) && store.getSetting(key.approved(task.id)) !== patchId) {
+    const parts = [
+      signOff.length ? `Protected files:\n${signOff.map((f) => `- ${f}`).join('\n')}` : '',
+      migrations.length ? `Destructive database changes:\n${migrations.map((m) => `- ${m}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
+    const stat = signOff.length ? await git(dir, 'diff', '--stat', 'origin/main...HEAD', '--', ...signOff).catch(() => '') : '';
+    if (store.getSetting(`pendingApproval:${task.id}`) !== patchId) {
+      store.db
+        .prepare(`INSERT INTO questions (kind, task_id, project_id, question, options, default_option, asked_at, timeout_at) VALUES ('approval', ?, ?, ?, ?, ?, ?, ?)`)
+        // Never auto-approved: the default on timeout is to reject.
+        .run(task.id, project.id, `PR #${prNumber} "${task.title}" passed the checks and review, and needs your sign-off.\n\n${parts}\n\nApprove the merge?`, JSON.stringify(['approve', 'reject']), 'reject', ctx.now(), ctx.now() + 7 * 86400);
+      store.setSetting(`pendingApproval:${task.id}`, patchId);
+      await gh.ensureLabels(project.owner, project.id, [{ name: NEEDS_OWNER_LABEL, color: 'd93f0b' }]).then(() => gh.addLabels(project.owner, project.id, prNumber, [NEEDS_OWNER_LABEL])).catch(() => undefined);
+      await gh.comment(project.owner, project.id, prNumber, `**Waiting for the owner's sign-off.** The checks and the review passed; this PR needs the owner's approval before it merges.\n\n${parts}${stat ? `\n\n\`\`\`\n${stat}\n\`\`\`` : ''}`);
+      await ctx.notify('question', `${task.id} (PR #${prNumber}) needs your sign-off:\n${parts}`);
+    }
+    store.transition(task.id, 'blocked');
+    return 'blocked';
+  }
 
   // 5. Merge, only if nothing moved since the checks.
   store.transition(task.id, 'merging');
@@ -403,6 +419,9 @@ export function approveMigration(ctx: PipelineContext, taskId: string): void {
 export function rejectMigration(ctx: PipelineContext, taskId: string): void {
   ctx.store.setSetting(`pendingApproval:${taskId}`, null);
   ctx.store.db.prepare(`UPDATE questions SET answer = 'reject', answered_by = 'owner', answered_at = ? WHERE task_id = ? AND answer IS NULL`).run(ctx.now(), taskId);
-  ctx.store.transition(taskId, 'parked', { lastFailure: 'Owner rejected the destructive migration.' });
+  ctx.store.transition(taskId, 'parked', { lastFailure: 'The owner rejected the change at sign-off.' });
 }
+
+
+export const NEEDS_OWNER_LABEL = 'needs-owner';
 

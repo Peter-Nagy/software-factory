@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ORCHESTRATOR_PERMISSIONS, type GitHub, type RepoPermissions } from '../github.ts';
 import type { PipelineContext } from '../pipeline.ts';
-import { answerQuestion, applyTimeouts, getQuestion, markPosted, openQuestions, unpostedQuestions, type Question } from '../questions.ts';
+import { answerQuestion, applyTimeouts, getQuestion, isApproval, markPosted, openQuestions, unpostedQuestions, type Question } from '../questions.ts';
 import { taskId as makeTaskId } from '../tasks.ts';
 import type { Project } from '../types.ts';
 import { digestText } from './digest.ts';
@@ -169,7 +169,7 @@ export class Bot {
   /** Called every tick: post new questions, apply timeouts, send the daily digest when it's due. */
   async tick(now: number, timezone: string, digestHour: number): Promise<void> {
     for (const q of unpostedQuestions(this.ctx)) {
-      const channel: ChannelName = q.kind === 'migration' ? 'approvals' : 'questions';
+      const channel: ChannelName = isApproval(q.kind) ? 'approvals' : 'questions';
       const msg = await this.post(channel, renderQuestion(q, timezone), [this.ownerId], questionButtons(q));
       markPosted(this.ctx, q.id, this.channels.get(channel)!, msg.id);
     }
@@ -324,7 +324,7 @@ export function questionButtons(q: Question): ActionRow[] {
       type: 1,
       components: opts.map((label, idx) => ({
         type: 2 as const,
-        style: q.kind === 'migration' ? (label === 'approve' ? (3 as const) : (4 as const)) : label === q.defaultOption ? (1 as const) : (2 as const),
+        style: isApproval(q.kind) ? (label === 'approve' ? (3 as const) : (4 as const)) : label === q.defaultOption ? (1 as const) : (2 as const),
         label: label.slice(0, 80),
         custom_id: `q:${q.id}:${idx}`,
       })),
@@ -334,8 +334,8 @@ export function questionButtons(q: Question): ActionRow[] {
 
 export function renderQuestion(q: Question, timezone: string): string {
   const when = new Date(q.timeoutAt * 1000).toLocaleString('en-GB', { timeZone: timezone, weekday: 'short', hour: '2-digit', minute: '2-digit' });
-  const head = q.kind === 'migration' ? `**Approval needed** (#${q.id}, ${q.taskId})` : `**Question #${q.id}** from ${q.taskId ?? 'the factory'}`;
-  const fallback = q.kind === 'migration' ? `No answer by ${when} means **reject**.` : `No answer by ${when} means **${q.defaultOption ?? 'the agent decides'}**. Or reply with \`/answer ${q.id} …\`.`;
+  const head = isApproval(q.kind) ? `**Approval needed** (#${q.id}, ${q.taskId})` : `**Question #${q.id}** from ${q.taskId ?? 'the factory'}`;
+  const fallback = isApproval(q.kind) ? `No answer by ${when} means **reject**.` : `No answer by ${when} means **${q.defaultOption ?? 'the agent decides'}**. Or reply with \`/answer ${q.id} …\`.`;
   return `${head}\n${q.question}\n\n${fallback}`;
 }
 

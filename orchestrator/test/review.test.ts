@@ -13,7 +13,8 @@ import { excludeRunDir, shareWorktreesUnder } from '../src/runner/worktree.ts';
 import type { GitHub } from '../src/github.ts';
 import { taskFromIssue } from '../src/issues.ts';
 import { runBuild, type PipelineContext } from '../src/pipeline.ts';
-import { approveMigration, runReviewStage } from '../src/review.ts';
+import { approveMigration, rejectMigration, runReviewStage } from '../src/review.ts';
+import { answerQuestion } from '../src/questions.ts';
 import { scheduleReviews } from '../src/scheduler.ts';
 import { Secrets } from '../src/secrets.ts';
 import type { Project, Task } from '../src/types.ts';
@@ -138,7 +139,10 @@ function setup() {
   const statuses: { sha: string; context: string; state: string; description?: string }[] = [];
   const comments: string[] = [];
   const merges: { pr: number; sha: string }[] = [];
+  const labels: string[] = [];
   const fakeGh = {
+    ensureLabels: async () => undefined,
+    addLabels: async (_o: string, _r: string, _n: number, l: string[]) => void labels.push(...l),
     readFile: async (_o: string, _r: string, path: string) => {
       try {
         return g(origin, 'show', `main:${path}`);
@@ -164,7 +168,7 @@ function setup() {
   };
   const write = (name: string, text: string) => writeFileSync(join(root, name), text);
   const count = (name: string) => (existsSync(join(root, name)) ? readFileSync(join(root, name), 'utf8').trim().split('\n').filter(Boolean).length : 0);
-  return { root, g, origin, seed, ctx, store, project, statuses, comments, merges, write, count };
+  return { root, g, origin, seed, ctx, store, project, statuses, comments, merges, labels, write, count };
 }
 
 /** Build issue `n` with the fake agent in `agentMode`, ending with an open PR in review. */
@@ -231,27 +235,59 @@ test('review stage: an unusable verdict retries later, and gates are not run twi
   assert.equal(s.count('reviewsrun'), 2);
 });
 
-test('review stage: destructive migrations wait for approval of exactly that change', async () => {
+test('review stage: destructive migrations wait for sign-off of exactly that change, after the checks and review', async () => {
   const s = setup();
   await built(s, 5, 'migration');
   s.write('review-mode', 'review=approve');
   assert.equal(await review(s, 5), 'blocked');
   assert.equal(s.store.task('app#5')!.state, 'blocked');
-  assert.equal(s.count('gatesrun'), 0);
-  const q = s.store.db.prepare('SELECT question, default_option FROM questions').get() as { question: string; default_option: string };
-  assert.match(q.question, /002\.sql:1 drop-column/);
+  assert.equal(s.count('gatesrun'), 8);
+  assert.equal(s.count('reviewsrun'), 1);
+  const q = s.store.db.prepare('SELECT kind, question, default_option FROM questions').get() as { kind: string; question: string; default_option: string };
+  assert.equal(q.kind, 'approval');
+  assert.match(q.question, /passed the checks and review[\s\S]*002\.sql:1 drop-column/);
   assert.equal(q.default_option, 'reject');
+  assert.deepEqual(s.labels, ['needs-owner']);
   approveMigration(s.ctx, 'app#5');
   assert.equal(await review(s, 5), 'merged');
+  assert.equal(s.count('gatesrun'), 8); // nothing ran twice
+  assert.equal(s.count('reviewsrun'), 1);
 });
 
-test('review stage: changes to protected files are sent back, not merged', async () => {
+test('review stage: protected files merge only after the owner signs off; the reviewer is told to look hard', async () => {
   const s = setup();
   await built(s, 6, 'protected');
   s.write('review-mode', 'review=approve');
-  assert.equal(await review(s, 6), 'fix');
-  assert.match(s.store.task('app#6')!.lastFailure!, /protected files[\s\S]*factory\.yaml/);
-  assert.equal(s.count('gatesrun'), 0);
+  assert.equal(await review(s, 6), 'blocked');
+  assert.match(readFileSync(join(s.root, 'reviewprompt'), 'utf8'), /changes protected files \(factory\.yaml\)/);
+  assert.match(s.comments.at(-1)!, /sign-off[\s\S]*factory\.yaml/);
+  assert.equal(s.merges.length, 0);
+  // asking again doesn't duplicate the question
+  s.store.transition('app#6', 'in_review');
+  assert.equal(await review(s, 6), 'blocked');
+  assert.equal((s.store.db.prepare('SELECT COUNT(*) AS n FROM questions').get() as { n: number }).n, 1);
+  const q = s.store.db.prepare('SELECT id FROM questions').get() as { id: number };
+  assert.deepEqual(answerQuestion(s.ctx, q.id, 'approve', 'owner'), { ok: true, effect: 'app#6 goes back to review and merges if the checks pass' });
+  assert.equal(await review(s, 6), 'merged');
+});
+
+test('review stage: a project\'s ownerApproval paths (read from main) also need sign-off; CI workflows always go back', async () => {
+  const s = setup();
+  s.g(s.seed, 'pull', '-q', s.origin, 'main');
+  writeFileSync(join(s.seed, 'factory.yaml'), 'kind: web-app\nsecrets: [APP_SECRET]\nownerApproval: [feature.txt]\n');
+  s.g(s.seed, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qam', 'owner approval');
+  s.g(s.seed, 'push', '-q', s.origin, 'main');
+  await built(s, 9);
+  s.write('review-mode', 'review=approve');
+  assert.equal(await review(s, 9), 'blocked');
+  assert.match((s.store.db.prepare('SELECT question FROM questions').get() as { question: string }).question, /- feature\.txt/);
+  const r = rejectMigration;
+  r(s.ctx, 'app#9');
+  assert.equal(s.store.task('app#9')!.state, 'parked');
+
+  await built(s, 10, 'workflow');
+  assert.equal(await review(s, 10), 'fix');
+  assert.match(s.store.task('app#10')!.lastFailure!, /CI workflow files[\s\S]*ci\.yml/);
 });
 
 test('review stage: a branch behind main is synced with a merge commit before the checks', async () => {

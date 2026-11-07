@@ -131,6 +131,8 @@ export const ProjectConfigSchema = z.object({
     .default({}),
   /** Names of secrets (items in the 1Password Factory vault) the project's tasks get as env vars. */
   secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/)).default([]),
+  /** Extra paths (globs) whose changes merge only after the owner signs off, on top of the gates' own files. */
+  ownerApproval: z.array(z.string()).default([]),
   gates: z
     .object({
       /** E2E tests required. Unset: required for kinds with user-facing flows (web-app, static-site, ios). */

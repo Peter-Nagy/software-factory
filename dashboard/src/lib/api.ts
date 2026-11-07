@@ -10,7 +10,7 @@ export interface Task {
   lastFailure: string | null; interruptions: number; pendingMode: "build" | "fix" | "resume"; createdAt: number; updatedAt: number
 }
 export interface Usage { fiveHourPct: number | null; fiveHourResetsAt: number | null; sevenDayPct: number | null; sevenDayResetsAt: number | null; source: string; takenAt: number }
-export interface Question { id: number; kind: "product" | "migration"; taskId: string | null; projectId: string | null; question: string; options: string[]; defaultOption: string | null; askedAt: number; timeoutAt: number }
+export interface Question { id: number; kind: "product" | "migration" | "approval"; taskId: string | null; projectId: string | null; question: string; options: string[]; defaultOption: string | null; askedAt: number; timeoutAt: number }
 export interface Plan { id: number; title: string; target: "new" | "existing"; focus: "change" | "goals" | "issue"; projectId: string | null; issueNumber: number | null; state: "drafting" | "thinking" | "executing" | "executed" | "failed" | "archived"; model: Model; result: { repoCreated?: string; trackingIssue?: number; issues: Record<string, number>; error?: string } | null; createdAt: number; updatedAt: number }
 export interface PlanIssue { key: string; title: string; body: string; size: "s" | "m" | "l"; risk: "low" | "medium" | "high"; area?: string; dependsOn: string[] }
 export interface PlanDetail {

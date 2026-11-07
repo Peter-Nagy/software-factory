@@ -10,7 +10,7 @@ import { Link } from "@/lib/router"
 export function QuestionCard({ q, timezone, onDone }: { q: Question; timezone: string; onDone: () => void }) {
   const [busy, setBusy] = useState(false)
   const [other, setOther] = useState<string | null>(null)
-  const migration = q.kind === "migration"
+  const migration = q.kind === "migration" || q.kind === "approval"
   const send = async (answer: string) => {
     setBusy(true)
     try {

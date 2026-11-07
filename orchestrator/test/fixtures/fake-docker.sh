@@ -38,6 +38,11 @@ case "$MODE" in
     g add . && g commit -qm "feat: and skip e2e"
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
     ;;
+  workflow)
+    mkdir -p .github/workflows && echo "on: push" > .github/workflows/ci.yml
+    g add . && g commit -qm "ci: tweak"
+    echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
+    ;;
   question)
     echo '{"question":"Which colour?","options":["blue","green"],"default":"blue"}' > .factory-run/question.json
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"need input","num_turns":2}'
