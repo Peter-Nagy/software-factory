@@ -146,6 +146,8 @@ function setup() {
         return null;
       }
     },
+    issueText: async (_o: string, _r: string, n: number) => `# #${n}: Issue ${n}\n\n## Acceptance criteria\n- [ ] Lint runs ESLint`,
+    pullRequest: async () => ({ body: '## What changed\n- fake feature' }),
     findOpenPullRequest: async () => null,
     createPullRequest: async () => ({ number: 41, html_url: 'x' }),
     setStatus: async (_o: string, _r: string, sha: string, s: { state: string; context: string; description?: string }) => void statuses.push({ sha, ...s }),
@@ -324,7 +326,9 @@ test('contract: a toolchain Dockerfile is built once, checks run in it, and the 
     assert.equal(s.count('builds'), 1);
     const images = readFileSync(join(s.root, 'gateimages'), 'utf8').trim().split('\n');
     assert.ok(images.length === 8 && images.every((i) => i.startsWith('factory-project-app:')), images.join(','));
-    assert.match(readFileSync(join(s.root, 'reviewprompt'), 'utf8'), /changes the project's check definitions \(\.factory\/Dockerfile\)[\s\S]*weakens any check/);
+    const reviewPrompt = readFileSync(join(s.root, 'reviewprompt'), 'utf8');
+    assert.match(reviewPrompt, /<issue number="26">[\s\S]*Lint runs ESLint[\s\S]*<\/issue>[\s\S]*<pr-description>[\s\S]*fake feature/);
+    assert.match(reviewPrompt, /changes the project's check definitions \(\.factory\/Dockerfile\)[\s\S]*weakens any check/);
 
     await built(s, 27, 'contract');
     s.write('review-mode', 'imagefail\nreview=approve');
@@ -369,6 +373,7 @@ test('macOS runner: agent and project checks run through the runner with a Simul
     assert.deepEqual(envNames!.split(','), ['APP_SECRET', 'CLAUDE_CODE_OAUTH_TOKEN', 'FACTORY_SIMULATOR', 'GH_TOKEN']);
     assert.equal(sim, '0A1B2C3D-0000-4000-8000-000000000001');
     assert.doesNotMatch(readFileSync(join(s.root, 'argsseen'), 'utf8'), /value-of/); // secrets never on a command line
+    assert.match(readFileSync(join(s.root, 'argsseen'), 'utf8'), /<issue number="30">[\s\S]*Lint runs ESLint/); // the agent gets the issue itself
     assert.match(readFileSync(join(s.root, 'simulators'), 'utf8'), /simctl delete 0A1B2C3D/);
 
     s.write('review-mode', 'review=approve');

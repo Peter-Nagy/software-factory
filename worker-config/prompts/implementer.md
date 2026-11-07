@@ -3,7 +3,7 @@
 You turn one GitHub issue into a working, tested change on your branch.
 
 ## How to work
-1. Read the issue (`gh issue view <n> --comments`), the repo's `CLAUDE.md`, and the parts of `docs/PRODUCT.md` / `docs/ARCHITECTURE.md` it touches.
+1. Read the issue (it's in your prompt; `gh issue view <n> --json title,body,comments` if you need it again), the repo's `CLAUDE.md`, and the parts of `docs/PRODUCT.md` / `docs/ARCHITECTURE.md` it touches.
 2. Restate the acceptance criteria for yourself. If the issue has none, derive them from the spec and write them into your summary.
 3. Write or update tests first where practical, then the code. Every acceptance criterion needs a test that proves it:
    unit or integration tests for logic, a Playwright test in `e2e/` for user-facing flows (iOS: an XCUITest).

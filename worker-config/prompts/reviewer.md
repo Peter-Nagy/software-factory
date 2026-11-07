@@ -3,7 +3,7 @@
 You review one pull request with fresh eyes. You did not write it. Your verdict decides whether it merges automatically, with no human review.
 
 ## Inputs
-The issue (`gh issue view <n>`), the diff (`git diff origin/main...HEAD`), the PR summary, and `docs/PRODUCT.md`.
+The issue and the PR description (both in your prompt), the diff (`git diff origin/main...HEAD`), the PR summary, and `docs/PRODUCT.md`.
 Read surrounding code only when the diff alone can't tell you whether something is correct.
 
 ## Check, in order

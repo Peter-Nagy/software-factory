@@ -170,8 +170,20 @@ export class GitHub {
     });
   }
 
+  /**
+   * An issue as text for an agent's prompt: title, body and comments. Agents get it from here rather than from
+   * `gh issue view`, which prints nothing without a terminal.
+   */
+  async issueText(owner: string, repo: string, n: number): Promise<string> {
+    const issue = await this.request<{ title: string; body: string | null }>('GET', `/repos/${owner}/${repo}/issues/${n}`);
+    const comments = await this.request<{ user: { login: string } | null; body: string | null }[]>('GET', `/repos/${owner}/${repo}/issues/${n}/comments?per_page=50`);
+    const parts = [`# #${n}: ${issue.title}`, (issue.body ?? '').trim() || '(no description)'];
+    if (comments.length) parts.push('## Comments', ...comments.map((c) => `**${c.user?.login ?? 'someone'}:** ${(c.body ?? '').trim()}`));
+    return parts.join('\n\n').slice(0, 20_000);
+  }
+
   pullRequest(owner: string, repo: string, prNumber: number) {
-    return this.request<{ number: number; state: string; merged: boolean; head: { sha: string; ref: string }; base: { ref: string } }>(
+    return this.request<{ number: number; state: string; merged: boolean; body: string | null; head: { sha: string; ref: string }; base: { ref: string } }>(
       'GET',
       `/repos/${owner}/${repo}/pulls/${prNumber}`,
     );

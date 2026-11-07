@@ -63,10 +63,25 @@ export interface AgentQuestion {
 export const MAX_INTERRUPTIONS = 5;
 const RUNNER_BACKOFF_S = 5 * 60;
 
-export function implementerPrompt(task: Task, failureSummary: string | null): string {
+/** The issue as the agent sees it, between markers so it reads as data, not as instructions from the factory. */
+export function issueBlock(n: number, text: string | null): string {
+  if (!text) return `(The factory couldn't fetch issue #${n}. Try: gh issue view ${n} --json title,body,comments)`;
+  return [`<issue number="${n}">`, text, '</issue>'].join('\n');
+}
+
+/** The issue's text, or null if it can't be fetched (the prompt then says how to try). */
+export async function fetchIssue(gh: GitHub, project: Project, n: number): Promise<string | null> {
+  try {
+    return await gh.issueText(project.owner, project.id, n);
+  } catch {
+    return null;
+  }
+}
+
+export function implementerPrompt(task: Task, failureSummary: string | null, issue: string | null = null): string {
   const lines = [
-    `Implement GitHub issue #${task.issueNumber}: "${task.title}".`,
-    `Read it first with: gh issue view ${task.issueNumber} --comments`,
+    `Implement GitHub issue #${task.issueNumber}: "${task.title}". Its acceptance criteria are the definition of done.`,
+    issueBlock(task.issueNumber, issue),
     `You are on branch ${task.branch}. Commit in small steps. Don't push: you have read-only GitHub access, and the factory pushes your commits when you finish.`,
     `Finish by writing ${FACTORY_DIR}/summary.md (PR description: what changed, how it was tested, acceptance criteria checklist).`,
   ];
@@ -183,7 +198,7 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
         ? answers
           ? `Continue the task.${answerBlock}\n\nFinish as instructed earlier, including ${FACTORY_DIR}/summary.md.`
           : RESUME_PROMPT
-        : implementerPrompt(task, task.lastFailure) + answerBlock;
+        : implementerPrompt(task, task.lastFailure, await fetchIssue(gh, project, task.issueNumber)) + answerBlock;
   // A fix prompt already carries the gates' complaints; a fresh build gets told about a missing contract up front.
   const fullPrompt = prompt + imageNote + (mode === 'build' ? contractNote : '');
   const args = buildClaudeArgs({

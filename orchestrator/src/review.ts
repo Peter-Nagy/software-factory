@@ -29,7 +29,7 @@ import {
   type StepOutcome,
 } from './gates/plan.ts';
 import { ORCHESTRATOR_PERMISSIONS, STATUS_CONTEXTS } from './github.ts';
-import { handleFailure, loadProjectConfig, MAX_INTERRUPTIONS, NEEDS_MACOS, projectRunner, worktreeRoot, type PipelineContext } from './pipeline.ts';
+import { fetchIssue, handleFailure, issueBlock, loadProjectConfig, MAX_INTERRUPTIONS, NEEDS_MACOS, projectRunner, worktreeRoot, type PipelineContext } from './pipeline.ts';
 import { promptPath, reviewerModel, roleConfig } from './roles.ts';
 import { removeVolume, runCommandInContainer, runInContainer } from './runner/container.ts';
 import { projectImage } from './runner/image.ts';
@@ -323,9 +323,19 @@ async function runReviewer(ctx: PipelineContext, project: Project, task: Task, d
   const model = reviewerModel(task.risk, await diffSize(dir));
   const { token: readToken } = await ctx.repoAccess(project, REVIEWER_PERMISSIONS);
   const env = { [config.worker.claudeTokenEnv]: await ctx.secrets.get(config.worker.claudeTokenEnv), GH_TOKEN: readToken };
+  const { gh } = await ctx.repoAccess(project, REVIEWER_PERMISSIONS);
+  const issue = await fetchIssue(gh, project, task.issueNumber);
+  let prBody: string | null = null;
+  try {
+    prBody = (await gh.pullRequest(project.owner, project.id, prNumber)).body ?? '';
+  } catch {
+    // the prompt says how to fetch it
+  }
   const prompt = [
-    `Review pull request #${prNumber} for issue #${task.issueNumber} ("${task.title}").`,
-    `Issue: gh issue view ${task.issueNumber} --comments. PR description: gh pr view ${prNumber}. Diff: git diff origin/main...HEAD.`,
+    `Review pull request #${prNumber} for issue #${task.issueNumber} ("${task.title}"). Judge it against the issue's acceptance criteria.`,
+    issueBlock(task.issueNumber, issue),
+    prBody === null ? `(Couldn't fetch the PR description: gh pr view ${prNumber} --json body)` : ['<pr-description>', prBody.slice(0, 10_000), '</pr-description>'].join('\n'),
+    'Diff: git diff origin/main...HEAD.',
     "The project's checks (build, lint, tests, E2E where required) and the security scans already passed. Judge correctness, security, data safety, test quality, scope and the acceptance criteria.",
     ...context,
   ].join('\n');
