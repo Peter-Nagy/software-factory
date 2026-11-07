@@ -109,6 +109,8 @@ export type GovernorConfig = z.infer<typeof GovernorConfigSchema>;
 export const ProjectConfigSchema = z.object({
   kind: z.enum(['web-app', 'static-site', 'service', 'cli', 'ios']),
   priority: z.number().int().min(1).max(5).default(3),
+  /** Where tasks run: Linux containers, or macOS VMs (Xcode). Unset: macos for ios, linux otherwise. */
+  runner: z.enum(['linux', 'macos']).optional(),
   deploy: z
     .object({
       adapter: z.enum(['vercel', 'cf-pages', 'mac-docker', 'github-release', 'testflight', 'none']).default('none'),
@@ -120,22 +122,15 @@ export const ProjectConfigSchema = z.object({
   secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/)).default([]),
   gates: z
     .object({
-      e2e: z.boolean().default(true),
+      /** E2E tests required. Unset: required for kinds with user-facing flows (web-app, static-site, ios). */
+      e2e: z.boolean().optional(),
       securityScan: z.boolean().default(true),
       aiReview: z.boolean().default(true),
       destructiveMigrationCheck: z.boolean().default(true),
       migrationGlobs: z.array(z.string()).default(['**/migrations/**', '**/drizzle/**', '**/*.sql']),
-      /** Shell commands per check step. Unset steps use the defaults for the project kind; "" turns a step off. */
-      commands: z
-        .object({
-          install: z.string().optional(),
-          typecheck: z.string().optional(),
-          lint: z.string().optional(),
-          test: z.string().optional(),
-          e2e: z.string().optional(),
-        })
-        .default({}),
       timeoutMinutes: z.number().positive().default(20),
+      /** Minutes allowed to build the project's toolchain image from .factory/Dockerfile. */
+      imageBuildTimeoutMinutes: z.number().positive().default(30),
     })
     .default({}),
   maintenance: z

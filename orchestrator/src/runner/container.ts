@@ -13,6 +13,11 @@ export interface ContainerSpec {
   sessionsDir?: string;
   /** Mount the checkout read-only (reviewer). */
   readOnlyWork?: boolean;
+  /**
+   * Named Docker volume mounted as the worker's home, so what one gate step installs there (package caches,
+   * toolchains managed per user) is still there for the next step. Removed with removeVolume afterwards.
+   */
+  homeVolume?: string;
   /** Extra read-only mounts: host path -> container path. */
   extraReadOnlyMounts?: Record<string, string>;
   cpus: number;
@@ -47,11 +52,18 @@ export function dockerCommandArgs(spec: ContainerSpec, command: string[]): strin
     'no-new-privileges',
     '--cap-drop',
     'ALL',
+    // Project images build on the worker image; a Dockerfile can't swap out the entrypoint that installs the config.
+    '--entrypoint',
+    '/usr/local/bin/factory-entrypoint',
     '-v',
     `${spec.worktree}:/work${spec.readOnlyWork ? ':ro' : ''}`,
     '-v',
     `${spec.workerConfigDir}:/home/worker/.claude-config:ro`,
   ];
+  if (spec.homeVolume) {
+    if (!/^[a-z0-9][a-z0-9_.-]*$/.test(spec.homeVolume)) throw new Error(`Invalid volume name: ${spec.homeVolume}`);
+    args.push('-v', `${spec.homeVolume}:/home/worker`);
+  }
   if (spec.sessionsDir) args.push('-v', `${spec.sessionsDir}:/home/worker/.claude/projects`);
   for (const [host, container] of Object.entries(spec.extraReadOnlyMounts ?? {})) args.push('-v', `${host}:${container}:ro`);
   args.push('-w', '/work');
@@ -128,6 +140,11 @@ export function killLeftoverContainers(docker = process.env.FACTORY_DOCKER_BIN ?
   const ps = spawnSync(docker, ['ps', '-q', '--filter', 'label=factory.run'], { encoding: 'utf8' });
   const ids = (ps.stdout ?? '').split('\n').filter(Boolean);
   if (ids.length) spawnSync(docker, ['rm', '-f', ...ids], { stdio: 'ignore' });
+}
+
+/** Remove a named volume (a gate run's home). Failures are ignored: the nightly prune catches leftovers. */
+export function removeVolume(name: string, docker = process.env.FACTORY_DOCKER_BIN ?? 'docker'): void {
+  spawnSync(docker, ['volume', 'rm', '-f', name], { stdio: 'ignore' });
 }
 
 export interface CommandResult {

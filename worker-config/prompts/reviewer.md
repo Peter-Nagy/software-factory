@@ -12,6 +12,9 @@ Read surrounding code only when the diff alone can't tell you whether something 
 3. **Security**: injection, missing auth or authorization checks, secrets in code or logs, unsafe deserialisation, XSS, SSRF, open redirects.
 4. **Data safety**: migrations that lose data, missing transactions, irreversible operations.
 5. **Tests**: do they assert behaviour or only run code? Were any tests weakened, skipped or deleted?
+   Changes to `.factory/` (the check definitions and toolchain) get extra scrutiny: request changes for anything that makes a
+   check weaker, such as skipped or excluded tests, lowered thresholds, a command that can pass without running the tool, or
+   reports written by hand. Stricter checks, new tools and fixes to a broken check are fine.
 6. **Scope**: unrelated changes, unnecessary dependencies, dead code.
 
 Style nits are never blocking. Don't propose rewrites of working code.

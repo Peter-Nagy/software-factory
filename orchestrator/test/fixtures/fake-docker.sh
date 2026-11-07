@@ -24,7 +24,7 @@ case "$MODE" in
   success)
     echo "feature $(date +%s%N)" >> feature.txt
     g add feature.txt && g commit -qm "feat: fake work"
-    printf '## What changed\n- fake feature\n' > .factory/summary.md
+    printf '## What changed\n- fake feature\n' > .factory-run/summary.md
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","total_cost_usd":0.1,"num_turns":3}'
     ;;
   migration)
@@ -39,7 +39,7 @@ case "$MODE" in
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
     ;;
   question)
-    echo '{"question":"Which colour?","options":["blue","green"],"default":"blue"}' > .factory/question.json
+    echo '{"question":"Which colour?","options":["blue","green"],"default":"blue"}' > .factory-run/question.json
     echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"need input","num_turns":2}'
     ;;
   limit)
@@ -52,6 +52,22 @@ case "$MODE" in
     printf 'kind: web-app\nsecrets: [APP_SECRET, EVIL_SECRET]\n' > factory.yaml
     g add factory.yaml && g commit -qm "chore: tweak config"
     echo '{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"sess-fake","result":"failed","num_turns":5}'
+    ;;
+  nochecks)
+    g rm -q .factory/checks.yaml && g commit -qm "chore: drop checks"
+    printf 'done\n' > .factory-run/summary.md
+    echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
+    ;;
+  contract)
+    printf 'FROM factory-worker:current\nRUN echo toolchain %s\n' "$(date +%s%N)" > .factory/Dockerfile
+    echo "x" >> feature.txt
+    g add . && g commit -qm "build: add toolchain"
+    echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
+    ;;
+  trailer)
+    echo "x" >> feature.txt
+    g add . && g commit -qm "feat: remove importer" -m "Tests-Removed: the importer and its tests are gone"
+    echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-fake","result":"done","num_turns":3}'
     ;;
   crash)
     echo "docker: image not found" >&2

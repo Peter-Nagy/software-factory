@@ -1,13 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildClaudeArgs } from './claude.ts';
 import { parseProjectConfig, type FactoryConfig, type ProjectConfig } from './config.ts';
 import type { Store } from './db.ts';
+import { CHECKS_FILE, CONTRACT_HELP, RUN_DIR, runnerFor } from './gates/contract.ts';
 import { ORCHESTRATOR_PERMISSIONS, type GitHub, type RepoPermissions } from './github.ts';
 import { takeAnswersForTask } from './questions.ts';
 import { nextStep } from './retry.ts';
 import { promptPath, roleConfig } from './roles.ts';
 import { runInContainer } from './runner/container.ts';
+import { projectImage } from './runner/image.ts';
 import { checkoutPath, git, gitRemote, hasUnpushedCommits, prepareCheckout, redact } from './runner/worktree.ts';
 import type { Secrets } from './secrets.ts';
 import { branchName } from './tasks.ts';
@@ -27,7 +29,11 @@ export interface PipelineContext {
 }
 
 /** Files the agent writes for the orchestrator. Excluded from git via .git/info/exclude and cleared before each run. */
-export const FACTORY_DIR = '.factory';
+export const FACTORY_DIR = RUN_DIR;
+
+/** Until the macOS runner exists, tasks of macOS projects wait parked instead of running where they can't build. */
+export const MACOS_RUNNER_AVAILABLE = false;
+export const NEEDS_MACOS = 'This project runs on the macOS runner (Xcode), which is not set up yet. Requeue it once it is.';
 export interface AgentQuestion {
   question: string;
   options: string[];
@@ -118,9 +124,28 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
   const factoryDir = join(dir, FACTORY_DIR);
   rmSync(factoryDir, { recursive: true, force: true }); // never act on a previous run's question or summary
   mkdirSync(factoryDir, { recursive: true });
-  appendFileSync(join(dir, '.git', 'info', 'exclude'), `\n${FACTORY_DIR}/\n`);
 
   const projectConfig = await loadProjectConfig(dir);
+  if (runnerFor(projectConfig) === 'macos' && !MACOS_RUNNER_AVAILABLE) {
+    store.transition(task.id, 'parked', { lastFailure: NEEDS_MACOS });
+    await ctx.notify('alert', `Parked ${task.id}: ${NEEDS_MACOS}`);
+    return;
+  }
+  mkdirSync(config.paths.logs, { recursive: true });
+  // Agents run in the project's toolchain image, as the checkout defines it right now (the branch, in a fix).
+  let image: Awaited<ReturnType<typeof projectImage>>;
+  try {
+    image = await projectImage({
+      dir, projectId: project.id, baseImage: config.worker.image,
+      timeoutMs: projectConfig.gates.imageBuildTimeoutMinutes * 60_000,
+      logPath: join(config.paths.logs, `${project.id}-${task.issueNumber}-image-${Date.now()}.log`),
+    });
+  } catch (e) {
+    image = { image: config.worker.image, problem: null };
+    store.event('task.image_error', task.id, { error: (e as Error).message });
+  }
+  const imageNote = image.problem ? `\n\nThe project's toolchain image can't be used, so this run uses the plain worker image. Fix it:\n${image.problem}` : '';
+  const contractNote = existsSync(join(dir, CHECKS_FILE)) ? '' : `\n\nThis repo has no ${CHECKS_FILE} yet, and the checks fail without it. Add it in this task.\n${CONTRACT_HELP}`;
   const env = {
     [config.worker.claudeTokenEnv]: await ctx.secrets.get(config.worker.claudeTokenEnv),
     GH_TOKEN: agentToken,
@@ -139,8 +164,10 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
           ? `Continue the task.${answerBlock}\n\nFinish as instructed earlier, including ${FACTORY_DIR}/summary.md.`
           : RESUME_PROMPT
         : implementerPrompt(task, task.lastFailure) + answerBlock;
+  // A fix prompt already carries the gates' complaints; a fresh build gets told about a missing contract up front.
+  const fullPrompt = prompt + imageNote + (mode === 'build' ? contractNote : '');
   const args = buildClaudeArgs({
-    prompt,
+    prompt: fullPrompt,
     model,
     effort: role.effort,
     maxTurns: role.maxTurns,
@@ -149,7 +176,6 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
     appendSystemPromptFile: promptPath('implementer'),
   });
 
-  mkdirSync(config.paths.logs, { recursive: true });
   const sessionsDir = join(config.paths.state, 'sessions', project.id, String(task.issueNumber));
   mkdirSync(sessionsDir, { recursive: true });
   const logPath = join(config.paths.logs, `${project.id}-${task.issueNumber}-${Date.now()}.jsonl`);
@@ -160,7 +186,7 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
     result = await runInContainer(
       {
         name: `factory-${project.id}-${task.issueNumber}-${Date.now()}`.toLowerCase().replace(/[^a-z0-9_.-]/g, '-'),
-        image: config.worker.image,
+        image: image.image,
         worktree: dir,
         workerConfigDir: config.paths.workerConfig,
         sessionsDir,

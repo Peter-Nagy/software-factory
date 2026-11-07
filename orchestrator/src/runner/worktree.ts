@@ -1,7 +1,8 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { RUN_DIR } from '../gates/contract.ts';
 
 const exec = promisify(execFile);
 
@@ -78,8 +79,23 @@ export async function prepareCheckout(opts: { remoteUrl: string; dir: string; br
   }
   const remote = await git(dir, 'branch', '-r', '--list', `origin/${branch}`);
   await git(dir, 'checkout', '-f', '-B', branch, remote ? `origin/${branch}` : `origin/${base}`);
-  await git(dir, 'clean', '-fd', '-e', '.factory');
+  excludeRunDir(dir);
+  await git(dir, 'clean', '-fd', '-e', RUN_DIR);
   return dir;
+}
+
+/**
+ * Keep the orchestrator's scratch dir out of git. Older checkouts excluded `.factory/`, which is now the
+ * project's committed check contract, so that line is dropped.
+ */
+export function excludeRunDir(dir: string): void {
+  const path = join(dir, '.git', 'info', 'exclude');
+  const lines = existsSync(path) ? readFileSync(path, 'utf8').split('\n') : [];
+  const kept = lines.filter((l) => !['.factory', '.factory/'].includes(l.trim()));
+  while (kept.length && kept.at(-1)!.trim() === '') kept.pop();
+  if (!kept.some((l) => l.trim() === `${RUN_DIR}/`)) kept.push(`${RUN_DIR}/`);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${kept.join('\n')}\n`);
 }
 
 export function removeCheckout(dir: string): void {

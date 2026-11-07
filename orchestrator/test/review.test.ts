@@ -1,13 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFactoryConfig, parseProjectConfig, GovernorConfigSchema } from '../src/config.ts';
 import { Store } from '../src/db.ts';
 import { formatReviewFailure, gateSteps, protectedChanges, reviewPasses } from '../src/gates/plan.ts';
+import { ContractError, countJunit, dockerfileProblem, e2eRequired, parseChecks, reportProblem, runnerFor, testCountProblem, testsRemovedReason } from '../src/gates/contract.ts';
+import { excludeRunDir } from '../src/runner/worktree.ts';
 import type { GitHub } from '../src/github.ts';
 import { taskFromIssue } from '../src/issues.ts';
 import { runBuild, type PipelineContext } from '../src/pipeline.ts';
@@ -24,12 +26,58 @@ chmodSync(reviewDocker, 0o755);
 
 // ---------- pure logic ----------
 
-test('gate steps: defaults per stack, overrides, e2e and security switches', () => {
-  const names = (yaml: string) => gateSteps(parseProjectConfig(yaml)).map((s) => s.name);
-  assert.deepEqual(names('kind: web-app'), ['install', 'typecheck', 'lint', 'test', 'e2e', 'secrets', 'dependencies', 'sast']);
-  assert.deepEqual(names('kind: cli\ngates: {e2e: false, securityScan: false, commands: {lint: ""}}'), ['install', 'typecheck', 'test']);
-  const custom = gateSteps(parseProjectConfig('kind: service\ngates: {commands: {test: "make test"}}'));
-  assert.equal(custom.find((s) => s.name === 'test')!.command, 'make test');
+const CHECKS = 'setup: make deps\nbuild: make build\nlint: make lint\ntest: make test\ne2e: make e2e\n';
+
+test('check contract: required checks, fail closed, any stack', () => {
+  const names = (yaml: string, checks = CHECKS) => gateSteps(parseProjectConfig(yaml), parseChecks(checks)).map((s) => s.name);
+  assert.deepEqual(names('kind: web-app'), ['setup', 'build', 'lint', 'test', 'e2e', 'secrets', 'dependencies', 'sast']);
+  assert.deepEqual(names('kind: cli\ngates: {securityScan: false}', 'build: go build ./...\nlint: golangci-lint run\ntest: gotestsum --junitfile $FACTORY_REPORT_DIR/r.xml\n'), ['build', 'lint', 'test']);
+  const steps = gateSteps(parseProjectConfig('kind: cli'), parseChecks(CHECKS));
+  assert.equal(steps.find((s) => s.name === 'test')!.reports, true);
+  assert.equal(steps.find((s) => s.name === 'lint')!.reports, false);
+  // missing, empty, unknown or incomplete definitions fail instead of passing vacuously
+  assert.throws(() => parseChecks(null), ContractError);
+  assert.throws(() => parseChecks('build: x\nlint: x\n'), /test: is missing/);
+  assert.throws(() => parseChecks('build: x\nlint: "  "\ntest: x\n'), /lint: is empty/);
+  assert.throws(() => parseChecks('build: x\nlint: x\ntest: x\ntypecheck: x\n'), /typecheck/);
+  assert.throws(() => parseChecks('build: [x'), /not valid YAML/);
+  // user-facing kinds need e2e unless the owner turns it off
+  assert.throws(() => gateSteps(parseProjectConfig('kind: web-app'), parseChecks('build: x\nlint: x\ntest: x\n')), /no e2e check/);
+  assert.equal(e2eRequired(parseProjectConfig('kind: web-app\ngates: {e2e: false}')), false);
+  assert.equal(e2eRequired(parseProjectConfig('kind: service')), false);
+  assert.equal(runnerFor(parseProjectConfig('kind: ios')), 'macos');
+  assert.equal(runnerFor(parseProjectConfig('kind: cli\nrunner: macos')), 'macos');
+  assert.equal(runnerFor(parseProjectConfig('kind: web-app')), 'linux');
+});
+
+test('check contract: JUnit evidence, test count, Dockerfile base', () => {
+  const xml = '<testsuite><testcase name="a"/><testcase name="b"><skipped/></testcase><!-- <testcase name="c"/> --><testcase name="d" time="1">\n</testcase></testsuite>';
+  assert.deepEqual(countJunit([xml]), { tests: 3, failed: 0, skipped: 1 });
+  assert.deepEqual(countJunit(['<testcase name="x"><failure message="boom"/></testcase>', '<testcase name="y"><error/></testcase>']), { tests: 2, failed: 2, skipped: 0 });
+  assert.equal(reportProblem('test', [xml]), null);
+  assert.match(reportProblem('test', [])!, /no JUnit XML/);
+  assert.match(reportProblem('test', ['<testsuite tests="0"/>'])!, /ran no tests/);
+  assert.match(reportProblem('e2e', ['<testsuite><testcase name="a"><skipped/></testcase></testsuite>'])!, /ran no tests/);
+  assert.match(reportProblem('test', ['<testcase name="x"><failure/></testcase>'])!, /1 failing test/);
+  assert.equal(testCountProblem(10, null, null), null); // first merge sets the baseline
+  assert.equal(testCountProblem(12, 10, null), null);
+  assert.match(testCountProblem(8, 10, null)!, /ran 8 tests; main runs 10/);
+  assert.equal(testCountProblem(8, 10, 'removed the legacy importer'), null);
+  assert.equal(testsRemovedReason('feat: x\n\nbody\n\nTests-Removed: legacy importer is gone\n'), 'legacy importer is gone');
+  assert.equal(testsRemovedReason('feat: nothing to see'), null);
+  assert.equal(dockerfileProblem('FROM factory-worker:current\nRUN apt-get install -y golang', 'factory-worker:current'), null);
+  assert.equal(dockerfileProblem('FROM golang:1.25 AS tools\nRUN go install x\nFROM factory-worker:current\nCOPY --from=tools /go/bin/x /usr/local/bin/', 'factory-worker:current'), null);
+  assert.match(dockerfileProblem('FROM ubuntu:24.04\n', 'factory-worker:current')!, /final stage/);
+  assert.match(dockerfileProblem('RUN true\n', 'factory-worker:current')!, /no FROM/);
+});
+
+test('checkouts exclude the scratch dir, not the committed .factory/ contract', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'factory-excl-'));
+  execFileSync('git', ['init', '-q', dir]);
+  writeFileSync(join(dir, '.git', 'info', 'exclude'), '# git ls-files --others --exclude-from=.git/info/exclude\n\n.factory/\n');
+  excludeRunDir(dir);
+  excludeRunDir(dir);
+  assert.equal(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8'), '# git ls-files --others --exclude-from=.git/info/exclude\n.factory-run/\n');
 });
 
 test('protected paths: gate definitions and scanner ignore files', () => {
@@ -76,6 +124,8 @@ function setup() {
   g(root, 'init', '-q', '--bare', '-b', 'main', origin);
   g(root, 'init', '-q', '-b', 'main', seed);
   writeFileSync(join(seed, 'factory.yaml'), 'kind: web-app\nsecrets: [APP_SECRET]\n');
+  mkdirSync(join(seed, '.factory'));
+  writeFileSync(join(seed, '.factory', 'checks.yaml'), CHECKS);
   g(seed, 'add', '.');
   g(seed, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init');
   g(seed, 'push', '-q', origin, 'main');
@@ -83,13 +133,13 @@ function setup() {
   const store = new Store(':memory:');
   const project: Project = { id: 'app', owner: 'me', kind: 'web-app', state: 'active', priority: 3, createdAt: 1 };
   store.upsertProject(project);
-  const statuses: { sha: string; context: string; state: string }[] = [];
+  const statuses: { sha: string; context: string; state: string; description?: string }[] = [];
   const comments: string[] = [];
   const merges: { pr: number; sha: string }[] = [];
   const fakeGh = {
     findOpenPullRequest: async () => null,
     createPullRequest: async () => ({ number: 41, html_url: 'x' }),
-    setStatus: async (_o: string, _r: string, sha: string, s: { state: string; context: string }) => void statuses.push({ sha, ...s }),
+    setStatus: async (_o: string, _r: string, sha: string, s: { state: string; context: string; description?: string }) => void statuses.push({ sha, ...s }),
     comment: async (_o: string, _r: string, _n: number, body: string) => void comments.push(body),
     mergePullRequest: async (_o: string, _r: string, pr: number, sha: string) => (merges.push({ pr, sha }), { sha: 'm', merged: true }),
   } as unknown as GitHub;
@@ -207,4 +257,86 @@ test('review stage: a branch behind main is synced with a merge commit before th
   const head = s.g(s.origin, 'rev-parse', 'claude/7-issue-7');
   assert.equal(s.g(s.origin, 'log', '-1', '--format=%s', head), "Merge remote-tracking branch 'origin/main' into claude/7-issue-7");
   assert.equal(s.merges[0]!.sha, head);
+});
+
+// ---------- the check contract in the review stage ----------
+
+test('contract: a branch without checks fails the gates without running anything', async () => {
+  const s = setup();
+  await built(s, 20, 'nochecks');
+  s.write('review-mode', 'review=approve');
+  assert.equal(await review(s, 20), 'fix');
+  assert.match(s.store.task('app#20')!.lastFailure!, /\.factory\/checks\.yaml is missing[\s\S]*JUnit XML/);
+  assert.equal(s.count('gatesrun'), 0);
+  assert.equal(s.statuses.at(-1)!.state, 'failure');
+});
+
+test('contract: tests that exit 0 without a report, or with zero tests, fail', async () => {
+  const s = setup();
+  await built(s, 21);
+  s.write('review-mode', 'noreport\nreview=approve');
+  assert.equal(await review(s, 21), 'fix');
+  assert.match(s.store.task('app#21')!.lastFailure!, /checks failed: test, e2e[\s\S]*no JUnit XML report/);
+  assert.equal(s.count('reviewsrun'), 0);
+
+  await built(s, 22);
+  s.write('review-mode', 'tests=0\nreview=approve');
+  assert.equal(await review(s, 22), 'fix');
+  assert.match(s.store.task('app#22')!.lastFailure!, /ran no tests/);
+});
+
+test('contract: the test count is recorded at merge and may not drop without a stated reason', async () => {
+  const s = setup();
+  await built(s, 23);
+  s.write('review-mode', 'tests=5\nreview=approve');
+  assert.equal(await review(s, 23), 'merged');
+  assert.equal(s.store.getSetting('testCount:app'), '5');
+  assert.match(s.statuses.find((x) => x.context === 'factory/gates' && x.state === 'success')!.description ?? '', /5 tests/);
+
+  await built(s, 24);
+  s.write('review-mode', 'tests=3\nreview=approve');
+  assert.equal(await review(s, 24), 'fix');
+  assert.match(s.store.task('app#24')!.lastFailure!, /ran 3 tests; main runs 5[\s\S]*Tests-Removed/);
+
+  await built(s, 25, 'trailer');
+  s.write('review-mode', 'tests=3\nreview=approve');
+  assert.equal(await review(s, 25), 'merged');
+  assert.match(readFileSync(join(s.root, 'reviewprompt'), 'utf8'), /ran 3 tests \(main ran 5\)[\s\S]*importer and its tests are gone/);
+  assert.equal(s.store.getSetting('testCount:app'), '3');
+});
+
+test('contract: a toolchain Dockerfile is built once, checks run in it, and the reviewer watches .factory/ changes', async () => {
+  const s = setup();
+  process.env.DOCKER_FAKE_STATE = s.root;
+  try {
+    await built(s, 26, 'contract');
+    s.write('review-mode', 'review=approve');
+    assert.equal(await review(s, 26), 'merged');
+    assert.equal(s.count('builds'), 1);
+    const images = readFileSync(join(s.root, 'gateimages'), 'utf8').trim().split('\n');
+    assert.ok(images.length === 8 && images.every((i) => i.startsWith('factory-project-app:')), images.join(','));
+    assert.match(readFileSync(join(s.root, 'reviewprompt'), 'utf8'), /changes the project's check definitions \(\.factory\/Dockerfile\)[\s\S]*weakens any check/);
+
+    await built(s, 27, 'contract');
+    s.write('review-mode', 'imagefail\nreview=approve');
+    assert.equal(await review(s, 27), 'fix');
+    assert.match(s.store.task('app#27')!.lastFailure!, /Building \.factory\/Dockerfile failed[\s\S]*Unable to locate package/);
+  } finally {
+    delete process.env.DOCKER_FAKE_STATE;
+  }
+});
+
+test('contract: macOS projects wait parked instead of running in a Linux container', async () => {
+  const s = setup();
+  s.g(s.seed, 'pull', '-q', s.origin, 'main');
+  writeFileSync(join(s.seed, 'factory.yaml'), 'kind: ios\n');
+  s.g(s.seed, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qam', 'ios');
+  s.g(s.seed, 'push', '-q', s.origin, 'main');
+  process.env.FACTORY_DOCKER_BIN = agentDocker;
+  s.store.upsertTask(taskFromIssue('app', 3, { number: 28, title: 'Issue 28', body: null, labels: [] }));
+  await runBuild(s.ctx, s.project, s.store.task('app#28')!, 'sonnet');
+  const t = s.store.task('app#28')!;
+  assert.equal(t.state, 'parked');
+  assert.match(t.lastFailure!, /macOS runner/);
+  assert.equal(existsSync(join(s.root, 'argsseen')), false); // no agent ran
 });

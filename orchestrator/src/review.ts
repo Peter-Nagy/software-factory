@@ -1,6 +1,22 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildClaudeArgs } from './claude.ts';
+import {
+  CHECKS_FILE,
+  CONTRACT_DIR,
+  CONTRACT_HELP,
+  ContractError,
+  countJunit,
+  parseChecks,
+  REPORT_DIR_IN_CONTAINER,
+  reportProblem,
+  RUN_DIR,
+  runnerFor,
+  testCountProblem,
+  testsRemovedReason,
+  TESTS_REMOVED_TRAILER,
+  type CheckName,
+} from './gates/contract.ts';
 import { checkMigrations } from './gates/migration-check.ts';
 import {
   formatGateFailure,
@@ -13,9 +29,10 @@ import {
   type StepOutcome,
 } from './gates/plan.ts';
 import { ORCHESTRATOR_PERMISSIONS, STATUS_CONTEXTS } from './github.ts';
-import { handleFailure, loadProjectConfig, MAX_INTERRUPTIONS, type PipelineContext } from './pipeline.ts';
+import { handleFailure, loadProjectConfig, MACOS_RUNNER_AVAILABLE, MAX_INTERRUPTIONS, NEEDS_MACOS, type PipelineContext } from './pipeline.ts';
 import { promptPath, reviewerModel, roleConfig } from './roles.ts';
-import { runCommandInContainer, runInContainer } from './runner/container.ts';
+import { removeVolume, runCommandInContainer, runInContainer } from './runner/container.ts';
+import { projectImage } from './runner/image.ts';
 import { changedFiles, changePatchId, checkoutPath, containsBase, diffSize, git, gitRemote, headSha, prepareCheckout, redact } from './runner/worktree.ts';
 import { branchName } from './tasks.ts';
 import type { Model, Project, RunResult, Task } from './types.ts';
@@ -28,7 +45,19 @@ const key = {
   gates: (id: string) => `gates:${id}`, // head sha whose checks passed
   review: (id: string) => `review:${id}`, // patch id the reviewer approved
   approved: (id: string) => `approvedMigration:${id}`, // patch id the owner approved
+  tests: (id: string) => `gateTests:${id}`, // tests the task's last green gates ran
+  mainTests: (projectId: string) => `testCount:${projectId}`, // tests main ran at the last merge
 };
+
+/** Every .xml file under a report directory (tools may nest them). */
+function readReports(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    if (statSync(p).isDirectory()) return readReports(p);
+    return n.toLowerCase().endsWith('.xml') ? [readFileSync(p, 'utf8')] : [];
+  });
+}
 
 export type ReviewOutcome = 'merged' | 'fix' | 'blocked' | 'retry' | 'parked';
 
@@ -73,6 +102,11 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
   const patchId = await changePatchId(dir);
   const files = await changedFiles(dir);
   const projectConfig = await loadProjectConfig(dir);
+  if (runnerFor(projectConfig) === 'macos' && !MACOS_RUNNER_AVAILABLE) {
+    store.transition(task.id, 'parked', { lastFailure: NEEDS_MACOS });
+    await ctx.notify('alert', `Parked ${task.id}: ${NEEDS_MACOS}`);
+    return 'parked';
+  }
 
   // 2a. Protected files: the gates' own definitions. Agents must not change them.
   const touched = protectedChanges(files);
@@ -100,51 +134,114 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
     }
   }
 
-  // 3. Gates.
+  // 3. Gates: the project's own checks (fail closed if any required one is missing), then the security scans.
   if (store.getSetting(key.gates(task.id)) !== head) {
     await gh.setStatus(project.owner, project.id, head, { state: 'pending', context: STATUS_CONTEXTS.gates, description: 'Running checks' });
-    const env = await ctx.secrets.getMany(projectConfig.secrets);
+    const fail = async (description: string, why: string): Promise<ReviewOutcome> => {
+      await gh.setStatus(project.owner, project.id, head, { state: 'failure', context: STATUS_CONTEXTS.gates, description });
+      store.event('task.gates', task.id, { head, failed: description });
+      await handleFailure(ctx, task.id, task.sessionId, why);
+      return 'fix';
+    };
+    let steps;
+    try {
+      const checksPath = join(dir, CHECKS_FILE);
+      steps = gateSteps(projectConfig, parseChecks(existsSync(checksPath) ? readFileSync(checksPath, 'utf8') : null));
+    } catch (e) {
+      if (!(e instanceof ContractError)) throw e;
+      return fail('Check contract missing or invalid', `${e.message}\n\n${CONTRACT_HELP}`);
+    }
     mkdirSync(config.paths.logs, { recursive: true });
     const logPath = join(config.paths.logs, `${project.id}-${task.issueNumber}-gates-${Date.now()}.log`);
+    let image;
+    try {
+      image = await projectImage({ dir, projectId: project.id, baseImage: config.worker.image, timeoutMs: projectConfig.gates.imageBuildTimeoutMinutes * 60_000, logPath });
+    } catch (e) {
+      return interruption(ctx, task, `image error: ${(e as Error).message}`);
+    }
+    if (image.problem) return fail('Toolchain image failed', clean(image.problem));
+
+    const secrets = await ctx.secrets.getMany(projectConfig.secrets);
+    const runTag = `${project.id}-${task.issueNumber}-${Date.now()}`.toLowerCase().replace(/[^a-z0-9_.-]/g, '-');
+    const homeVolume = `factory-gates-${runTag}`;
     const outcomes: StepOutcome[] = [];
-    for (const step of gateSteps(projectConfig)) {
-      let r;
-      try {
-        r = await runCommandInContainer(
-          {
-            name: `factory-gate-${project.id}-${task.issueNumber}-${step.name}-${Date.now()}`.toLowerCase().replace(/[^a-z0-9_.-]/g, '-'),
-            image: config.worker.image,
-            worktree: dir,
-            workerConfigDir: config.paths.workerConfig,
-            cpus: config.worker.cpus,
-            memoryGb: config.worker.memoryGb,
-            envNames: Object.keys(env),
-            labels: { 'factory.task': task.id, 'factory.gate': step.name },
-          },
-          ['bash', '-lc', step.command],
-          { env, timeoutMs: projectConfig.gates.timeoutMinutes * 60_000, logPath },
-        );
-      } catch (e) {
-        // Docker itself failed: not the PR's fault. Try again later without touching the retry ladder.
-        return interruption(ctx, task, `gate runner error: ${(e as Error).message}`);
+    let testsRan: number | null = null;
+    try {
+      for (const step of steps) {
+        const reportDir = join(dir, RUN_DIR, 'reports', step.name);
+        rmSync(reportDir, { recursive: true, force: true });
+        mkdirSync(reportDir, { recursive: true });
+        const env = { ...secrets, FACTORY_REPORT_DIR: `${REPORT_DIR_IN_CONTAINER}/${step.name}` };
+        let r;
+        try {
+          r = await runCommandInContainer(
+            {
+              name: `factory-gate-${runTag}-${step.name}`,
+              image: image.image,
+              worktree: dir,
+              workerConfigDir: config.paths.workerConfig,
+              homeVolume,
+              cpus: config.worker.cpus,
+              memoryGb: config.worker.memoryGb,
+              envNames: Object.keys(env),
+              labels: { 'factory.task': task.id, 'factory.gate': step.name },
+            },
+            ['bash', '-lc', step.command],
+            { env, timeoutMs: projectConfig.gates.timeoutMinutes * 60_000, logPath },
+          );
+        } catch (e) {
+          // Docker itself failed: not the PR's fault. Try again later without touching the retry ladder.
+          return interruption(ctx, task, `gate runner error: ${(e as Error).message}`);
+        }
+        const outcome: StepOutcome = { name: step.name, ok: r.exitCode === 0 && !r.timedOut, timedOut: r.timedOut, tail: clean(r.tail) };
+        // An exit code of 0 isn't enough for tests: the JUnit report has to show tests that ran and passed.
+        if (outcome.ok && step.reports) {
+          const reports = readReports(reportDir);
+          const problem = reportProblem(step.name as CheckName, reports);
+          if (problem) Object.assign(outcome, { ok: false, tail: `${problem}\n\n${outcome.tail}` });
+          else if (step.name === 'test') {
+            const c = countJunit(reports);
+            testsRan = c.tests - c.skipped;
+          }
+        }
+        outcomes.push(outcome);
+        if (step.name === 'setup' && !outcome.ok) break; // nothing else can run without dependencies
       }
-      outcomes.push({ name: step.name, ok: r.exitCode === 0 && !r.timedOut, timedOut: r.timedOut, tail: clean(r.tail) });
-      if (step.name === 'install' && r.exitCode !== 0) break; // nothing else can run without dependencies
+    } finally {
+      removeVolume(homeVolume);
     }
+    // The test count may not drop below main's without a stated reason.
+    const testOutcome = outcomes.find((o) => o.name === 'test');
+    const onMain = store.getSetting(key.mainTests(project.id));
+    const removedReason = testsRemovedReason(await git(dir, 'log', '--format=%B', 'origin/main..HEAD').catch(() => ''));
+    const dropped = testsRan === null ? null : testCountProblem(testsRan, onMain === null ? null : Number(onMain), removedReason);
+    if (testOutcome && dropped) Object.assign(testOutcome, { ok: false, tail: dropped });
+
     const failed = outcomes.filter((o) => !o.ok);
-    store.event('task.gates', task.id, { head, results: outcomes.map((o) => ({ name: o.name, ok: o.ok })) });
-    if (failed.length) {
-      await gh.setStatus(project.owner, project.id, head, { state: 'failure', context: STATUS_CONTEXTS.gates, description: `Failed: ${failed.map((f) => f.name).join(', ')}` });
-      await handleFailure(ctx, task.id, task.sessionId, formatGateFailure(outcomes));
-      return 'fix';
-    }
-    await gh.setStatus(project.owner, project.id, head, { state: 'success', context: STATUS_CONTEXTS.gates, description: `Passed: ${outcomes.map((o) => o.name).join(', ')}` });
+    store.event('task.gates', task.id, { head, image: image.image, tests: testsRan, results: outcomes.map((o) => ({ name: o.name, ok: o.ok })) });
+    if (failed.length) return fail(`Failed: ${failed.map((f) => f.name).join(', ')}`, formatGateFailure(outcomes));
+    await gh.setStatus(project.owner, project.id, head, {
+      state: 'success', context: STATUS_CONTEXTS.gates,
+      description: `Passed: ${outcomes.map((o) => o.name).join(', ')}${testsRan !== null ? ` (${testsRan} tests)` : ''}`,
+    });
+    store.setSetting(key.tests(task.id), testsRan === null ? null : String(testsRan));
     store.setSetting(key.gates(task.id), head);
   }
 
   // 4. Independent review (the only step that spends tokens).
   if (store.getSetting(key.review(task.id)) !== patchId) {
-    const verdict = await runReviewer(ctx, project, task, dir, prNumber);
+    const contractChanged = files.filter((f) => f === CONTRACT_DIR || f.startsWith(`${CONTRACT_DIR}/`));
+    const ran = store.getSetting(key.tests(task.id));
+    const onMain = store.getSetting(key.mainTests(project.id));
+    const removed = testsRemovedReason(await git(dir, 'log', '--format=%B', 'origin/main..HEAD').catch(() => ''));
+    const context = [
+      ran !== null ? `The test check ran ${ran} tests${onMain !== null ? ` (main ran ${onMain})` : ''}.` : '',
+      removed ? `A commit says tests were removed on purpose (${TESTS_REMOVED_TRAILER}: ${removed}). Judge whether that reason holds; if not, request changes.` : '',
+      contractChanged.length
+        ? `This PR changes the project's check definitions (${contractChanged.join(', ')}). Request changes if it weakens any check: a check that no longer tests what it did, skipped or excluded tests, lowered thresholds, a command that can pass without running the tool, or fabricated reports. Adding tools, stricter checks and fixing a broken check are fine.`
+        : '',
+    ].filter(Boolean);
+    const verdict = await runReviewer(ctx, project, task, dir, prNumber, context);
     if (verdict.kind === 'interrupted') return interruption(ctx, task, verdict.why);
     if (verdict.kind === 'changes') {
       await gh.setStatus(project.owner, project.id, head, { state: 'failure', context: STATUS_CONTEXTS.review, description: 'Changes requested' });
@@ -174,6 +271,8 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
     store.event('task.merge_failed', task.id, { error: clean((e as Error).message) });
     return 'retry';
   }
+  const ran = store.getSetting(key.tests(task.id));
+  if (ran !== null) store.setSetting(key.mainTests(project.id), ran);
   store.transition(task.id, 'done', { interruptions: 0 });
   await ctx.notify('info', `Merged ${task.id}: PR #${prNumber} "${task.title}"`);
   return 'merged';
@@ -198,7 +297,7 @@ type ReviewerVerdict =
   | { kind: 'changes'; text: string }
   | { kind: 'interrupted'; why: string };
 
-async function runReviewer(ctx: PipelineContext, project: Project, task: Task, dir: string, prNumber: number): Promise<ReviewerVerdict> {
+async function runReviewer(ctx: PipelineContext, project: Project, task: Task, dir: string, prNumber: number, context: string[]): Promise<ReviewerVerdict> {
   const { config, store } = ctx;
   const role = roleConfig(config, 'reviewer');
   const model = reviewerModel(task.risk, await diffSize(dir));
@@ -207,7 +306,8 @@ async function runReviewer(ctx: PipelineContext, project: Project, task: Task, d
   const prompt = [
     `Review pull request #${prNumber} for issue #${task.issueNumber} ("${task.title}").`,
     `Issue: gh issue view ${task.issueNumber} --comments. PR description: gh pr view ${prNumber}. Diff: git diff origin/main...HEAD.`,
-    'The checks (install, typecheck, lint, tests, E2E, security scans) already passed. Judge correctness, security, data safety, test quality, scope and the acceptance criteria.',
+    "The project's checks (build, lint, tests, E2E where required) and the security scans already passed. Judge correctness, security, data safety, test quality, scope and the acceptance criteria.",
+    ...context,
   ].join('\n');
   const args = buildClaudeArgs({
     prompt,

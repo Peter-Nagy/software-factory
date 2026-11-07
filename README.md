@@ -13,11 +13,25 @@ turn ideas and GitHub issues into tested, reviewed and deployed apps while you'r
 | --- | --- |
 | S0 spikes | All pass on the Mac mini ([results](spikes/results/summary.md)) |
 | M1 core: config, SQLite state, governor, scheduler, retry ladder, container runner, issue to PR | Done; ran end to end on factory-sandbox |
-| M2 gates, independent review, auto-merge | Done; first real merge: factory-sandbox PR #2 |
+| M2 gates, independent review, auto-merge | Done; first real merge: factory-sandbox PR #2. Gates follow the stack-independent check contract below |
 | M3 governor live: usage probe, own-use detection | Usage readings live from every run; own-use detection next |
 | M4 Discord: intake, questions with buttons, approvals, alerts, daily digest, slash commands | Built and tested; needs your bot token to go live |
 | Dashboard: board, project pages with goals, plan mode (M5 planning), activity | Built |
 | M6 deploy · M7 iOS · M8 maintenance · M10 self-improvement · M11 hardening | Planned |
+
+## Check contract
+
+The factory doesn't know any languages. Each project defines its checks for its own stack, and the gates fail closed:
+
+- `.factory/checks.yaml`: `build`, `lint` and `test` are required, `e2e` too for web apps, static sites and iOS
+  (unless `factory.yaml` sets `gates.e2e: false`), and `setup` is optional. Each value is a shell command run in `/work`.
+- `test` and `e2e` must write JUnit XML to `$FACTORY_REPORT_DIR`, and at least one test must run. An exit code of 0 alone doesn't pass.
+- The test count may not drop below main's unless a commit has a `Tests-Removed: <why>` trailer, which the reviewer judges.
+- `.factory/Dockerfile` (optional) adds the project's toolchain; its final stage must be `FROM factory-worker:current`.
+  It's built with only `.factory/` as context and cached by its contents. Agents and gates both run in that image.
+- Agents may change `.factory/`. The reviewer is told to reject any change that weakens a check.
+- `runner: macos` (the default for `kind: ios`) sends tasks to the macOS runner; until M7 exists those tasks wait parked.
+- Secrets, dependency and code scans (gitleaks, osv-scanner, semgrep) stay owned by the factory and work across stacks.
 
 ## Layout
 

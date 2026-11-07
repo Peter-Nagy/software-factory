@@ -335,7 +335,7 @@ export function starterFiles(file: PlanFile, product: string): Record<string, st
     'docs/PRODUCT.md': product,
     'factory.yaml': `kind: ${p.kind}\npriority: ${p.priority}\n`,
     'CLAUDE.md': `# ${p.name}\n\nRead docs/PRODUCT.md for what this is. The first issue scaffolds the stack and fills in this file:\nthe commands to run, the conventions and where things are. Keep it under 150 lines.\n`,
-    '.gitignore': 'node_modules/\n.venv/\n.env\n.env.*\n.factory/\ndist/\n.next/\ncoverage/\n',
+    '.gitignore': 'node_modules/\n.venv/\n.env\n.env.*\n.factory-run/\ndist/\n.next/\ncoverage/\n',
   };
 }
 
