@@ -2,7 +2,8 @@ import { parseArgs } from 'node:util';
 import { createApp } from './app.ts';
 import { approveMigration, rejectMigration } from './review.ts';
 import { dashboardToken } from './dashboard/server.ts';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { GitHubError } from './github.ts';
 import type { Project, ProjectKind } from './types.ts';
 
@@ -21,6 +22,8 @@ const HELP = `factory <command>
   reject <task-id>       Reject it; the task is parked
   requeue <task-id>      Put a parked or blocked task back in the queue (e.g. "habit-tracker#12")
   cancel <task-id>       Cancel a task
+  update [--now] [--wait <min>] [--yes]
+                         Update the running factory to origin/main: checks first, restart, health check, rollback on failure
 `;
 
 /**
@@ -44,10 +47,18 @@ async function tryProtect(app: Awaited<ReturnType<typeof createApp>>, project: P
 async function main(): Promise<void> {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
+    strict: false,
     options: { kind: { type: 'string', default: 'web-app' }, priority: { type: 'string', default: '3' } },
   });
   const [cmd, arg] = positionals;
   if (!cmd || cmd === 'help') return void console.log(HELP);
+
+  if (cmd === 'update') {
+    // A shell script, so it can roll back even when the new code doesn't start.
+    const script = fileURLToPath(new URL('../../ops/update.sh', import.meta.url));
+    const r = spawnSync('bash', [script, ...process.argv.slice(3)], { stdio: 'inherit' });
+    process.exit(r.status ?? 1);
+  }
 
   const app = await createApp();
   const { store, config } = app;

@@ -68,6 +68,7 @@ async function main(): Promise<void> {
   console.log(`Factory orchestrator started (tick ${config.schedule.tickSeconds}s).`);
   while (!stopping) {
     const now = app.now();
+    app.store.setSetting('heartbeat', String(now)); // GET /api/health reports it; ops/update.sh waits for a fresh one
     if (now - lastSync >= ISSUE_SYNC_EVERY_S) {
       await syncIssues(app);
       lastSync = now;

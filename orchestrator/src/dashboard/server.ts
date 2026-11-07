@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { execFileSync } from 'node:child_process';
 import { statusText } from '../discord/bot.ts';
 import { weeklyBurnLine } from '../governor.ts';
 import { ORCHESTRATOR_PERMISSIONS, type GitHub, type RepoPermissions } from '../github.ts';
@@ -61,6 +62,17 @@ import type { Model, Project } from '../types.ts';
 export interface DashboardContext extends PipelineContext {
   repoClient(project: Project, permissions?: RepoPermissions): Promise<{ gh: GitHub; token: string }>;
 }
+
+/** The commit this process runs, read once at startup. */
+const VERSION = (() => {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fileURLToPath(new URL('.', import.meta.url)), encoding: 'utf8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+})();
+const STARTED_AT = Math.floor(Date.now() / 1000);
+const isLoopback = (a: string | undefined) => a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
 
 /** The built React app (dashboard/: npm run build). */
 export const DIST = fileURLToPath(new URL('../../../dashboard/dist/', import.meta.url));
@@ -271,6 +283,12 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
       const local = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(req.headers.host ?? '');
       const cookie = `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${180 * 86400}${local ? '' : '; Secure'}`;
       return send(302, '', { Location: '/', 'Set-Cookie': cookie });
+    }
+
+    // Health, for ops/update.sh and monitoring: local requests only, no session needed, nothing private in it.
+    if (url.pathname === '/api/health' && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(req.headers.host ?? '') && isLoopback(req.socket.remoteAddress)) {
+      const beat = Number(ctx.store.getSetting('heartbeat') ?? 0);
+      return send(200, { ok: ctx.now() - beat < 5 * ctx.config.schedule.tickSeconds + 600, version: VERSION, startedAt: STARTED_AT, heartbeatAt: beat || null });
     }
 
     const authed = same(cookies(req)[COOKIE] ?? '', token);

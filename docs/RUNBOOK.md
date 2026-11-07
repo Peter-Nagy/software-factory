@@ -67,7 +67,17 @@ factory usage             # last 5-hour / 7-day reading
 factory pause 3           # no new runs for 3 hours (running ones finish)
 factory resume
 factory requeue app#12    # retry a parked task
+factory update            # update the running factory to origin/main (see below)
 ```
+
+### Updating the factory
+
+Merged PRs land on GitHub; the running factory changes only when you run `factory update`. It refuses local
+changes, shows the new commits, pauses new runs and waits for running agents (`--now` interrupts them instead; they
+resume after the restart), then fast-forwards, installs, typechecks, tests and builds. A failure there leaves the old
+version running. Otherwise it restarts and waits for `/api/health` to report the new commit with a fresh heartbeat;
+if that doesn't happen within 3 minutes it rolls back to the previous commit and restarts that. Log:
+`~/factory/logs/update.log`. Health: `curl http://127.0.0.1:4777/api/health` (local only).
 
 ## Recovery
 
