@@ -107,7 +107,7 @@ export function PageHeader({ eyebrow, title, children, actions, className }: {
 }) {
   return (
     <div className={cn("flex flex-wrap items-end gap-x-6 gap-y-3", className)}>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 basis-72">
         {eyebrow && <div className="mb-1 text-sm text-muted-foreground">{eyebrow}</div>}
         <h1 className="text-[1.75rem] leading-tight font-semibold tracking-tight sm:text-[2rem]">{title}</h1>
         {children}

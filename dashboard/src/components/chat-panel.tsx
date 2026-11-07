@@ -1,4 +1,4 @@
-import { ArrowUp, Bot } from "lucide-react"
+import { ArrowUp, Bot, Wand2 } from "lucide-react"
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
 import { toast } from "sonner"
 import { Markdown } from "@/components/markdown"
@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 
 export interface ChatMessage {
   id: number
-  role: "owner" | "planner" | "agent" | "system"
+  role: "owner" | "planner" | "agent" | "system" | "standin"
   text: string
 }
 
@@ -89,7 +89,12 @@ export function ChatPanel({ title, model, onModel, modelLocked, messages, thinki
         {messages.length === 0 && !thinking && <p className="text-sm text-muted-foreground">{emptyHint}</p>}
         {messages.map((m) => (
           <div key={m.id} className={cn("flex", m.role === "owner" ? "justify-end" : m.role === "system" ? "justify-center" : "justify-start")}>
-            {m.role === "owner" ? (
+            {m.role === "standin" ? (
+              <div className="max-w-[85%] rounded-3xl rounded-br-lg border border-dashed border-primary/40 bg-primary/6 px-4 py-2.5 text-sm">
+                <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-primary"><Wand2 className="size-3.5" /> Answered for you</p>
+                <OwnerText text={m.text} />
+              </div>
+            ) : m.role === "owner" ? (
               <div className="bg-accent-gradient max-w-[85%] rounded-3xl rounded-br-lg px-4 py-2.5 text-sm text-white shadow-[0_8px_20px_-12px_var(--primary)]"><OwnerText text={m.text} /></div>
             ) : m.role === "system" ? (
               <p className="max-w-[90%] rounded-full bg-muted/60 px-3 py-1 text-center text-xs text-muted-foreground">{m.text}</p>

@@ -1,9 +1,9 @@
-import { ArrowLeft, ArrowRight, Check, MessageCircleQuestion, PenLine, Send, Sparkles, Wand2 } from "lucide-react"
+import { ArrowLeft, ArrowRight, Check, FastForward, Loader2, MessageCircleQuestion, PenLine, Send, Sparkles, Undo2, Wand2 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import type { StudioQuestion } from "@/lib/api"
+import type { StudioAnswer, StudioQuestion } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 interface Answer {
@@ -54,11 +54,13 @@ function useStoredAnswers(key: string) {
 }
 
 /** The agent's questions as a form: one question at a time, options to click, your own words when they don't fit. */
-export function Interview({ storageKey, agent, questions, onSend }: {
+export function Interview({ storageKey, agent, questions, onSend, onSkip }: {
   storageKey: string
   agent: string
   questions: StudioQuestion[]
   onSend: (text: string) => Promise<void>
+  /** Hand the rest of the interview to a stand-in agent. */
+  onSkip?: () => Promise<void>
 }) {
   const key = `interview:${storageKey}:${hash(JSON.stringify(questions))}`
   const [answers, setAnswers, forget] = useStoredAnswers(key)
@@ -107,6 +109,18 @@ export function Interview({ storageKey, agent, questions, onSend }: {
     }
   }
 
+  const skip = async () => {
+    if (!onSkip) return
+    setSending(true)
+    try {
+      await onSkip()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setSending(false)
+    }
+  }
+
   // Keys: 1-9 pick an option, ← → move between questions. Not while typing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -133,6 +147,12 @@ export function Interview({ storageKey, agent, questions, onSend }: {
           <span className="inline-flex size-8 items-center justify-center rounded-full bg-white/15"><MessageCircleQuestion className="size-4" /></span>
           <p className="font-semibold tracking-tight">{agent} has {questions.length === 1 ? "a question" : `${questions.length} questions`}</p>
           <span className="ml-auto text-sm text-white/80">{done} of {questions.length} answered</span>
+          {onSkip && (
+            <button type="button" disabled={sending} onClick={() => void skip()} title="A stand-in agent answers these and any follow-ups; you review its answers afterwards"
+              className="inline-flex h-8 items-center gap-1.5 rounded-full bg-white/15 px-3.5 text-sm font-medium ring-1 ring-white/25 transition-colors hover:bg-white/25 disabled:opacity-50">
+              <FastForward className="size-3.5" /> Skip, answer for me
+            </button>
+          )}
         </div>
         <div className="relative mt-3 flex gap-1">
           {questions.map((qq, n) => (
@@ -252,5 +272,109 @@ export function Coverage({ topics }: { topics: { topic: string; done: boolean }[
         ))}
       </div>
     </div>
+  )
+}
+
+/** While the stand-in answers: which round it's on, and a way to take over. */
+export function StandinRunning({ agent, rounds, onStop }: { agent: string; rounds: number; onStop: () => Promise<void> }) {
+  return (
+    <section className="animate-rise flex flex-wrap items-center gap-3 rounded-3xl border border-dashed border-primary/40 bg-primary/6 p-4 sm:px-6">
+      <span className="bg-accent-gradient inline-flex size-9 items-center justify-center rounded-full text-white"><Loader2 className="size-4 animate-spin" /></span>
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold tracking-tight">Answering for you</p>
+        <p className="text-sm text-muted-foreground">A stand-in answers {agent}'s questions from what you've said and the approved documents{rounds ? ` · ${rounds} round${rounds === 1 ? "" : "s"} so far` : ""}. You review every answer at the end.</p>
+      </div>
+      <Button variant="outline" size="sm" onClick={() => void onStop().catch((e: Error) => toast.error(e.message))}><Undo2 /> Stop, I'll answer</Button>
+    </section>
+  )
+}
+
+/** The stand-in's answers, editable. Changes go back to the phase agent; none approve the phase and start the next. */
+export function AnswerReview({ answers, nextTitle, onSubmit }: {
+  answers: StudioAnswer[]
+  nextTitle: string | null
+  onSubmit: (edits: { id: number; answer: string }[]) => Promise<void>
+}) {
+  const [draft, setDraft] = useState<Record<number, string>>({})
+  const [busy, setBusy] = useState(false)
+  const value = (a: StudioAnswer) => draft[a.id] ?? a.answer
+  const changed = answers.filter((a) => value(a).trim() && value(a).trim() !== a.answer)
+  const rounds = [...new Set(answers.map((a) => a.round))]
+
+  const submit = async () => {
+    setBusy(true)
+    try {
+      await onSubmit(changed.map((a) => ({ id: a.id, answer: value(a).trim() })))
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const pick = (a: StudioAnswer, label: string) => {
+    const cur = value(a)
+    if (!a.question.multiSelect) return setDraft((d) => ({ ...d, [a.id]: label }))
+    const parts = cur.split(";").map((p) => p.trim()).filter(Boolean)
+    const next = parts.includes(label) ? parts.filter((p) => p !== label) : [...parts, label]
+    setDraft((d) => ({ ...d, [a.id]: next.join("; ") }))
+  }
+
+  return (
+    <section className="animate-rise overflow-clip rounded-3xl border bg-card shadow-elevation">
+      <div className="bg-hero relative overflow-hidden px-5 py-4 text-white sm:px-6">
+        <div className="pointer-events-none absolute -top-16 -right-10 size-48 rounded-full bg-white/10 blur-3xl" />
+        <div className="relative flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="inline-flex size-8 items-center justify-center rounded-full bg-white/15"><Wand2 className="size-4" /></span>
+          <div>
+            <p className="font-semibold tracking-tight">Review the answers given for you</p>
+            <p className="text-sm text-white/80">{answers.length} answers in {rounds.length} round{rounds.length === 1 ? "" : "s"}. Change anything that isn't what you'd say.</p>
+          </div>
+        </div>
+      </div>
+      <ol className="divide-y">
+        {answers.map((a, n) => {
+          const v = value(a)
+          const isChanged = v.trim() !== a.answer
+          const picked = a.question.multiSelect ? v.split(";").map((p) => p.trim()) : [v.trim()]
+          return (
+            <li key={a.id} className="space-y-2.5 px-5 py-4 sm:px-6">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span className="text-xs font-semibold text-muted-foreground">{n + 1}{a.question.header ? ` · ${a.question.header}` : ""}{rounds.length > 1 ? ` · round ${a.round}` : ""}</span>
+                {isChanged && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.7rem] font-semibold text-amber-700 dark:text-amber-300">Changed</span>}
+                {a.edited && !isChanged && <span className="rounded-full bg-emerald-500/12 px-2 py-0.5 text-[0.7rem] font-semibold text-emerald-700 dark:text-emerald-300">Set by you</span>}
+              </div>
+              <p className="font-medium leading-snug">{a.question.question}</p>
+              {a.question.options.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {a.question.options.map((o) => {
+                    const on = picked.includes(o.label)
+                    return (
+                      <button key={o.label} type="button" title={o.description} onClick={() => pick(a, o.label)}
+                        className={cn("inline-flex items-center gap-1 rounded-full px-3 py-1 text-sm transition-colors",
+                          on ? "bg-accent-gradient text-white" : "bg-muted text-muted-foreground ring-1 ring-border hover:text-foreground")}>
+                        {on && <Check className="size-3.5" />}{o.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              <Textarea value={v} onChange={(e) => setDraft((d) => ({ ...d, [a.id]: e.target.value }))} className={cn("min-h-11 py-2", isChanged && "ring-2 ring-amber-500/40")} rows={1} />
+              <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                <span className="min-w-0 flex-1">{a.reason ? <><span className="font-medium">Why:</span> {a.reason}</> : null}</span>
+                {isChanged && <button type="button" className="shrink-0 hover:text-foreground" onClick={() => setDraft((d) => { const { [a.id]: _, ...rest } = d; return rest })}>Undo</button>}
+              </div>
+            </li>
+          )
+        })}
+      </ol>
+      <div className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-5 py-3 sm:px-6">
+        <span className="text-xs text-muted-foreground">
+          {changed.length ? `${changed.length} changed: the agent updates the document, and may ask follow-ups.` : nextTitle ? `Looks right? This approves the step and starts ${nextTitle}.` : "Looks right? This approves the step."}
+        </span>
+        <Button size="sm" className="ml-auto" disabled={busy} onClick={submit}>
+          {changed.length ? <><Send /> Send {changed.length} change{changed.length === 1 ? "" : "s"}</> : <><Check /> Looks good, continue</>}
+        </Button>
+      </div>
+    </section>
   )
 }

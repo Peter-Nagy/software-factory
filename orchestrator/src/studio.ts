@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { buildClaudeArgs } from './claude.ts';
@@ -69,11 +69,15 @@ export interface PhaseRow {
   sessionId: string | null;
   note: string | null;
   updatedAt: number;
+  /** running: a stand-in agent is answering the interview; review: it has finished and the owner should check its answers. */
+  autoAnswer: AutoAnswer;
 }
+export type AutoAnswer = 'running' | 'review' | null;
 export interface StudioMessage {
   id: number;
   phase: PhaseKey;
-  role: 'owner' | 'agent' | 'system';
+  /** standin: answers the stand-in agent gave on the owner's behalf. */
+  role: 'owner' | 'agent' | 'system' | 'standin';
   text: string;
   at: number;
 }
@@ -116,7 +120,7 @@ const toStudio = (r: Row): Studio => ({
 });
 const toPhase = (r: Row): PhaseRow => ({
   phase: r.phase as PhaseKey, state: r.state as PhaseState, model: r.model as Model, sessionId: (r.session_id as string | null) ?? null,
-  note: (r.note as string | null) ?? null, updatedAt: Number(r.updated_at),
+  note: (r.note as string | null) ?? null, updatedAt: Number(r.updated_at), autoAnswer: (r.auto_answer as AutoAnswer) ?? null,
 });
 
 type Ctx = Pick<PipelineContext, 'store' | 'now' | 'config'>;
@@ -244,6 +248,7 @@ export function approvePhase(ctx: Ctx, id: number, phase: PhaseKey): void {
   if (!['drafting', 'stale', 'approved'].includes(row.state)) throw new Error(`${def.title} has nothing to approve yet`);
   if (readDoc(ctx, id, def.doc) === null) throw new Error(`${def.title} has no document yet (${def.doc})`);
   setPhase(ctx, id, phase, { state: 'approved', note: null });
+  setAutoAnswer(ctx, id, phase, null);
   for (const later of PHASES.slice(index(phase) + 1)) {
     const r = phaseRow(ctx, id, later.key);
     if (['approved', 'drafting'].includes(r.state)) setPhase(ctx, id, later.key, { state: 'stale', note: `${def.title} changed after this was written.` });
@@ -326,7 +331,7 @@ function phaseBrief(ctx: Pick<PipelineContext, 'config'>, phase: PhaseKey): stri
  * One turn with a phase's agent. Phases 1-6 run here; the build plan is a linked plan (planTurn).
  * Runs in the background; the dashboard polls the studio.
  */
-export async function studioTurn(ctx: PipelineContext, id: number, phase: PhaseKey, text: string, opts: { auto?: boolean } = {}): Promise<void> {
+export async function studioTurn(ctx: PipelineContext, id: number, phase: PhaseKey, text: string, opts: { auto?: boolean; standin?: boolean } = {}): Promise<boolean> {
   const studio = getStudio(ctx, id);
   if (!studio) throw new Error(`No studio ${id}`);
   const row = phaseRow(ctx, id, phase);
@@ -335,19 +340,62 @@ export async function studioTurn(ctx: PipelineContext, id: number, phase: PhaseK
   if (busy.has(key)) throw new Error('The agent is still working on this phase');
   busy.add(key);
   try {
-    if (phase === 'plan') return await planPhaseTurn(ctx, studio, text);
-    await phaseTurn(ctx, studio, row, text, opts.auto ?? false);
+    if (phase === 'plan') {
+      await planPhaseTurn(ctx, studio, text);
+      return true;
+    }
+    return await phaseTurn(ctx, studio, row, text, opts.auto ?? false, opts.standin ?? false);
   } finally {
     busy.delete(key);
   }
 }
 
-async function phaseTurn(ctx: PipelineContext, studio: Studio, row: PhaseRow, text: string, auto: boolean): Promise<void> {
+/** One `claude` run for a studio: a phase agent (resumable session) or the stand-in that answers for the owner. */
+async function runStudioAgent(ctx: PipelineContext, studio: Studio, phase: PhaseKey, o: { prompt: string; model: Model; resume: string | null; kind: 'phase' | 'standin' }) {
   const { config, store } = ctx;
+  const id = studio.id;
+  const role = roleConfig(config, 'studio');
+  const env = { [config.worker.claudeTokenEnv]: await ctx.secrets.get(config.worker.claudeTokenEnv) };
+  const standin = o.kind === 'standin';
+  const args = buildClaudeArgs({
+    prompt: o.prompt,
+    model: o.model,
+    effort: role.effort,
+    maxTurns: standin ? 30 : role.maxTurns,
+    resumeSessionId: o.resume,
+    appendSystemPromptFile: `${WORKER_CONFIG_MOUNT}/prompts/${standin ? 'studio-standin.md' : 'studio.md'}`,
+  });
+  mkdirSync(config.paths.logs, { recursive: true });
+  const logPath = join(config.paths.logs, `studio-${id}-${phase}${standin ? '-standin' : ''}-${Date.now()}.jsonl`);
+  const sessionsDir = join(studioDir(ctx, id), 'sessions', standin ? `${phase}-standin` : phase);
+  mkdirSync(sessionsDir, { recursive: true });
+  const runId = store.startRun({ taskId: null, role: 'studio', model: o.model, logPath, usageBefore: store.latestUsage() });
+  const result = await runInContainer(
+    {
+      name: `factory-studio-${id}-${phase}${standin ? '-standin' : ''}-${Date.now()}`,
+      image: config.worker.image,
+      worktree: studioWork(ctx, id),
+      workerConfigDir: config.paths.workerConfig,
+      sessionsDir,
+      cpus: config.worker.cpus,
+      memoryGb: config.worker.memoryGb,
+      envNames: Object.keys(env),
+      labels: { 'factory.role': 'studio', 'factory.studio': String(id), 'factory.phase': phase, ...(standin ? { 'factory.standin': '1' } : {}) },
+    },
+    args,
+    { env, timeoutMs: role.timeoutMinutes * 60_000, logPath },
+  );
+  store.finishRun(runId, result, result.resultText);
+  const snap = snapshotAfterRun(store.latestUsage(), result, ctx.now());
+  if (snap) store.recordUsage(snap);
+  return result;
+}
+
+async function phaseTurn(ctx: PipelineContext, studio: Studio, row: PhaseRow, text: string, auto: boolean, standin = false): Promise<boolean> {
   const id = studio.id;
   const def = phaseDef(row.phase);
   const wasState = row.state;
-  addMessage(ctx, id, row.phase, auto ? 'system' : 'owner', text);
+  addMessage(ctx, id, row.phase, standin ? 'standin' : auto ? 'system' : 'owner', text);
   setPhase(ctx, id, row.phase, { state: 'thinking', note: null });
   try {
     const first = row.sessionId === null;
@@ -366,46 +414,15 @@ async function phaseTurn(ctx: PipelineContext, studio: Studio, row: PhaseRow, te
           mode,
           `Owner: ${text}`,
         ].join('\n')
-      : `${mode}\n\n${text}`;
-    const role = roleConfig(config, 'studio');
-    const env = { [config.worker.claudeTokenEnv]: await ctx.secrets.get(config.worker.claudeTokenEnv) };
-    const args = buildClaudeArgs({
-      prompt,
-      model: row.model,
-      effort: role.effort,
-      maxTurns: role.maxTurns,
-      resumeSessionId: row.sessionId,
-      appendSystemPromptFile: `${WORKER_CONFIG_MOUNT}/prompts/studio.md`,
-    });
-    mkdirSync(config.paths.logs, { recursive: true });
-    const logPath = join(config.paths.logs, `studio-${id}-${row.phase}-${Date.now()}.jsonl`);
-    const sessionsDir = join(studioDir(ctx, id), 'sessions', row.phase);
-    mkdirSync(sessionsDir, { recursive: true });
-    const runId = store.startRun({ taskId: null, role: 'studio', model: row.model, logPath, usageBefore: store.latestUsage() });
-    const result = await runInContainer(
-      {
-        name: `factory-studio-${id}-${row.phase}-${Date.now()}`,
-        image: config.worker.image,
-        worktree: studioWork(ctx, id),
-        workerConfigDir: config.paths.workerConfig,
-        sessionsDir,
-        cpus: config.worker.cpus,
-        memoryGb: config.worker.memoryGb,
-        envNames: Object.keys(env),
-        labels: { 'factory.role': 'studio', 'factory.studio': String(id), 'factory.phase': row.phase },
-      },
-      args,
-      { env, timeoutMs: role.timeoutMinutes * 60_000, logPath },
-    );
-    store.finishRun(runId, result, result.resultText);
-    const snap = snapshotAfterRun(store.latestUsage(), result, ctx.now());
-    if (snap) store.recordUsage(snap);
+      : `${mode}\n\n${standin ? `${STANDIN_NOTE}\n\n` : ''}${text}`;
+    const result = await runStudioAgent(ctx, studio, row.phase, { prompt, model: row.model, resume: row.sessionId, kind: 'phase' });
     if (result.sessionId) setPhase(ctx, id, row.phase, { sessionId: result.sessionId });
     if (result.ok) {
       addMessage(ctx, id, row.phase, 'agent', result.resultText || '(no reply)');
       const hasDoc = readDoc(ctx, id, def.doc) !== null;
       setPhase(ctx, id, row.phase, { state: hasDoc ? 'drafting' : wasState === 'queued' ? 'ready' : wasState, note: null });
       if (hasDoc && auto) autopilotAfterTurn(ctx, id, row.phase);
+      return true;
     } else {
       const why = result.hitUsageLimit ? 'The usage limit was reached; try again after it resets.' : `The agent stopped: ${result.resultText.slice(0, 500) || 'no result'}`;
       addMessage(ctx, id, row.phase, 'system', why);
@@ -415,6 +432,7 @@ async function phaseTurn(ctx: PipelineContext, studio: Studio, row: PhaseRow, te
     addMessage(ctx, id, row.phase, 'system', `Couldn't run the agent: ${(e as Error).message}`);
     setPhase(ctx, id, row.phase, { state: readDoc(ctx, id, def.doc) !== null ? 'drafting' : 'ready' });
   }
+  return false;
 }
 
 /** The build plan phase is a plan in plan mode, linked to the studio; its planner reads the studio's documents. */
@@ -473,7 +491,7 @@ export function startQueuedPhases(ctx: PipelineContext, running: { estimatedCost
     }
     const prior = studioMessages(ctx, studio.id, queued.phase).length ? 'stale' : 'ready';
     const message = startMessage(queued.phase, (queued.note ?? '').includes('changed') ? 'stale' : prior === 'stale' ? 'stale' : 'ready', true);
-    start(studioTurn(ctx, studio.id, queued.phase, message, { auto: true }).catch((e: Error) => console.error(`Studio ${studio.id} ${queued.phase}: ${e.message}`)));
+    start(studioTurn(ctx, studio.id, queued.phase, message, { auto: true }).then(() => undefined, (e: Error) => console.error(`Studio ${studio.id} ${queued.phase}: ${e.message}`)));
     started.push(`${studio.id}:${queued.phase}`);
   }
   return started;
@@ -483,10 +501,194 @@ export function startQueuedPhases(ctx: PipelineContext, running: { estimatedCost
 export function recoverStudios(ctx: Ctx): void {
   for (const studio of listStudios(ctx)) {
     for (const p of studioPhases(ctx, studio.id)) {
+      if (p.autoAnswer === 'running') {
+        setAutoAnswer(ctx, studio.id, p.phase, null);
+        addMessage(ctx, studio.id, p.phase, 'system', 'A restart stopped the stand-in; skip again to continue.');
+      }
       if (p.state === 'thinking' && p.phase !== 'plan') {
         setPhase(ctx, studio.id, p.phase, { state: readDoc(ctx, studio.id, phaseDef(p.phase).doc) !== null ? 'drafting' : 'ready', note: 'Interrupted by a restart; send a message to continue.' });
       }
     }
     syncPlanPhase(ctx, studio.id);
   }
+}
+
+// ---------- answering the interview for the owner ----------
+
+/** Rounds of stand-in answers before it stops and hands over to the owner. */
+export const MAX_STANDIN_ROUNDS = 6;
+const STANDIN_NOTE = '[These answers come from a stand-in for the owner, who reviews them afterwards. Keep interviewing as usual; ask fewer, sharper follow-ups.]';
+
+export const StandinAnswersSchema = z.array(z.object({ answer: z.string().min(1).max(4000), reason: z.string().max(1000).default('') }));
+export interface StudioAnswer {
+  id: number;
+  phase: PhaseKey;
+  /** One skip = one batch; the review shows the latest. */
+  batch: number;
+  round: number;
+  question: StudioQuestion;
+  answer: string;
+  reason: string;
+  edited: boolean;
+}
+
+export function studioAnswers(ctx: Ctx, id: number, phase?: PhaseKey): StudioAnswer[] {
+  const rows = (phase
+    ? ctx.store.db.prepare('SELECT * FROM studio_answers WHERE studio_id = ? AND phase = ? ORDER BY id').all(id, phase)
+    : ctx.store.db.prepare('SELECT * FROM studio_answers WHERE studio_id = ? ORDER BY id').all(id)) as Row[];
+  return rows.map((r) => ({
+    id: Number(r.id), phase: r.phase as PhaseKey, batch: Number(r.batch), round: Number(r.round), question: JSON.parse(String(r.question)) as StudioQuestion,
+    answer: String(r.answer), reason: String(r.reason), edited: Number(r.edited) === 1,
+  }));
+}
+
+/** The answers from the latest skip, the ones under review. */
+export function latestAnswers(ctx: Ctx, id: number, phase: PhaseKey): StudioAnswer[] {
+  const all = studioAnswers(ctx, id, phase);
+  const last = Math.max(0, ...all.map((a) => a.batch));
+  return all.filter((a) => a.batch === last);
+}
+
+function setAutoAnswer(ctx: Ctx, id: number, phase: PhaseKey, v: AutoAnswer): void {
+  ctx.store.db.prepare('UPDATE studio_phases SET auto_answer = ? WHERE studio_id = ? AND phase = ?').run(v, id, phase);
+}
+
+/** The same shape the dashboard's answer form sends: each question quoted, the answer under it. */
+export function composeAnswers(pairs: { question: string; answer: string }[], intro = 'Answers to your questions:'): string {
+  return `${intro}\n\n${pairs.map((p) => `> ${p.question.replace(/\n/g, '\n> ')}\n${p.answer}`).join('\n\n')}`;
+}
+
+/** Whether the owner can hand this phase's open questions to the stand-in now. */
+export function canAutoAnswer(ctx: Ctx, id: number, phase: PhaseKey): string | null {
+  const row = phaseRow(ctx, id, phase);
+  if (phase === 'plan') return 'The build plan has no interview';
+  if (isBusy(id, phase) || row.state === 'thinking' || row.state === 'queued') return 'The agent is still working on this phase';
+  if (row.autoAnswer === 'running') return 'Already answering';
+  if (!readStatus(ctx, id, phase)?.questions.length) return 'There are no open questions';
+  return null;
+}
+
+/** The stand-in's prompt: everything the owner has said, the answers so far, and this round's questions. */
+function standinPrompt(ctx: Ctx, studio: Studio, phase: PhaseKey, questions: StudioQuestion[]): string {
+  const said = studioMessages(ctx, studio.id).filter((m) => m.role === 'owner').map((m) => `[${phaseDef(m.phase).title}] ${m.text}`).join('\n\n---\n\n');
+  const before = studioAnswers(ctx, studio.id).map((a) => `> ${a.question.question}\n${a.answer}${a.edited ? ' (the owner set this)' : ''}`).join('\n\n');
+  return [
+    `Studio: "${studio.title}". The ${phaseDef(phase).title} agent is interviewing the owner, who asked you to answer for them.`,
+    'Approved and draft documents are in /work/docs; read the ones that matter before answering.',
+    '',
+    '## What the owner has said (their own words carry most weight)',
+    (said || '(nothing yet)').slice(-30_000),
+    '',
+    '## Answers given so far',
+    (before || '(none)').slice(-20_000),
+    '',
+    '## Questions to answer now (JSON)',
+    JSON.stringify(questions, null, 1),
+    '',
+    `Write /work/status/${phase}.answers.json: one {"answer", "reason"} per question, in the same order.`,
+  ].join('\n');
+}
+
+async function standinRound(ctx: PipelineContext, studio: Studio, phase: PhaseKey, questions: StudioQuestion[], round: number): Promise<{ answer: string; reason: string }[] | string> {
+  const key = `${studio.id}:${phase}`;
+  if (busy.has(key)) return 'The agent is still working on this phase';
+  busy.add(key);
+  const was = phaseRow(ctx, studio.id, phase);
+  setPhase(ctx, studio.id, phase, { state: 'thinking', note: `Answering for you, round ${round}.` });
+  const file = join(studioWork(ctx, studio.id), 'status', `${phase}.answers.json`);
+  try {
+    rmSync(file, { force: true });
+    const result = await runStudioAgent(ctx, studio, phase, { prompt: standinPrompt(ctx, studio, phase, questions), model: was.model, resume: null, kind: 'standin' });
+    if (!result.ok) return result.hitUsageLimit ? 'the usage limit was reached' : `the stand-in stopped: ${result.resultText.slice(0, 300) || 'no result'}`;
+    if (!existsSync(file)) return 'the stand-in wrote no answers';
+    const parsed = StandinAnswersSchema.safeParse(JSON.parse(readFileSync(file, 'utf8')));
+    if (!parsed.success || parsed.data.length !== questions.length) return 'the stand-in\'s answers didn\'t match the questions';
+    return parsed.data;
+  } catch (e) {
+    return (e as Error).message;
+  } finally {
+    setPhase(ctx, studio.id, phase, { state: was.state, note: was.note });
+    busy.delete(key);
+  }
+}
+
+/**
+ * The owner pressed Skip: a stand-in answers the open questions, the phase agent continues, and so on until the
+ * phase agent has no more questions (or after MAX_STANDIN_ROUNDS). Then the owner reviews the answers.
+ */
+export async function autoInterview(ctx: PipelineContext, id: number, phase: PhaseKey): Promise<void> {
+  const why = canAutoAnswer(ctx, id, phase);
+  if (why) throw new Error(why);
+  setAutoAnswer(ctx, id, phase, 'running');
+  const batch = Number((ctx.store.db.prepare('SELECT COALESCE(MAX(batch), 0) + 1 AS b FROM studio_answers WHERE studio_id = ? AND phase = ?').get(id, phase) as Row).b);
+  addMessage(ctx, id, phase, 'system', 'You skipped the interview: a stand-in answers for you, then you review the answers.');
+  let rounds = 0;
+  let problem: string | null = null;
+  while (rounds < MAX_STANDIN_ROUNDS) {
+    if (phaseRow(ctx, id, phase).autoAnswer !== 'running') return; // the owner took over
+    const questions = readStatus(ctx, id, phase)?.questions ?? [];
+    if (!questions.length) break;
+    const studio = getStudio(ctx, id)!;
+    const answers = await standinRound(ctx, studio, phase, questions, rounds + 1);
+    if (typeof answers === 'string') {
+      problem = answers;
+      break;
+    }
+    if (phaseRow(ctx, id, phase).autoAnswer !== 'running') return;
+    rounds += 1;
+    const insert = ctx.store.db.prepare('INSERT INTO studio_answers (studio_id, phase, batch, round, question, answer, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    questions.forEach((q, i) => insert.run(id, phase, batch, rounds, JSON.stringify(q), answers[i]!.answer, answers[i]!.reason, ctx.now()));
+    const ok = await studioTurn(ctx, id, phase, composeAnswers(questions.map((q, i) => ({ question: q.question, answer: answers[i]!.answer }))), { standin: true });
+    if (!ok) {
+      problem = 'the phase agent stopped';
+      break;
+    }
+  }
+  if (phaseRow(ctx, id, phase).autoAnswer !== 'running') return;
+  const left = readStatus(ctx, id, phase)?.questions.length ?? 0;
+  if (rounds === 0) {
+    setAutoAnswer(ctx, id, phase, null);
+    addMessage(ctx, id, phase, 'system', `Couldn't answer for you: ${problem ?? 'nothing to answer'}. Answer the questions yourself or try again.`);
+    return;
+  }
+  setAutoAnswer(ctx, id, phase, 'review');
+  const end = problem ? `It stopped early (${problem}).` : left ? `It stopped after ${MAX_STANDIN_ROUNDS} rounds with ${left} questions still open.` : 'The agent has no more questions.';
+  addMessage(ctx, id, phase, 'system', `Answered ${rounds} round${rounds === 1 ? '' : 's'} for you. ${end} Review the answers, change any, then continue.`);
+  setPhase(ctx, id, phase, { note: 'Review the answers given for you, then continue.' });
+}
+
+/** The owner wants to answer themselves again: the loop stops after the current step. */
+export function stopAutoInterview(ctx: Ctx, id: number, phase: PhaseKey): void {
+  if (phaseRow(ctx, id, phase).autoAnswer !== 'running') return;
+  setAutoAnswer(ctx, id, phase, null);
+  addMessage(ctx, id, phase, 'system', 'Stopped answering for you.');
+}
+
+/**
+ * The owner reviewed the stand-in's answers. Changed answers go to the phase agent as one message (the interview
+ * continues from there); with none changed, the phase is approved and the next one starts.
+ */
+export function reviewAnswers(ctx: Ctx, id: number, phase: PhaseKey, edits: { id: number; answer: string }[]): { message: string | null; approved: boolean; next: { phase: PhaseKey; state: PhaseState } | null } {
+  const row = phaseRow(ctx, id, phase);
+  if (row.autoAnswer !== 'review') throw new Error('There are no answers to review');
+  const byId = new Map(latestAnswers(ctx, id, phase).map((a) => [a.id, a]));
+  const changed = edits
+    .map((e) => ({ a: byId.get(e.id), answer: e.answer.trim() }))
+    .filter((e): e is { a: StudioAnswer; answer: string } => !!e.a && !!e.answer && e.answer !== e.a.answer);
+  if (!changed.length) approvePhase(ctx, id, phase); // throws when there's nothing to approve yet; the review stays open
+  const update = ctx.store.db.prepare('UPDATE studio_answers SET answer = ?, edited = 1 WHERE id = ?');
+  for (const c of changed) update.run(c.answer.slice(0, 4000), c.a.id);
+  setAutoAnswer(ctx, id, phase, null);
+  if (changed.length) {
+    setPhase(ctx, id, phase, { note: null });
+    return {
+      message: composeAnswers(changed.map((c) => ({ question: c.a.question.question, answer: `${c.answer}\n(was: ${c.a.answer})` })),
+        'I reviewed the answers my stand-in gave and changed these. Update your document to match:'),
+      approved: false, next: null,
+    };
+  }
+  // The phase to start next: the first later one that's open. Autopilot queues it on its own.
+  const next = getStudio(ctx, id)!.mode === 'autopilot' ? undefined
+    : studioPhases(ctx, id).slice(index(phase) + 1).find((p) => p.state === 'ready' || p.state === 'stale');
+  return { message: null, approved: true, next: next ? { phase: next.phase, state: next.state } : null };
 }

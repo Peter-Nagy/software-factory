@@ -147,6 +147,20 @@ const MIGRATIONS: string[] = [
      at INTEGER NOT NULL
    );
    ALTER TABLE plans ADD COLUMN studio_id INTEGER;`,
+  // v7: a stand-in agent answers a phase's interview for the owner, who reviews the answers afterwards
+  `ALTER TABLE studio_phases ADD COLUMN auto_answer TEXT;
+   CREATE TABLE studio_answers (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     studio_id INTEGER NOT NULL REFERENCES studios(id),
+     phase TEXT NOT NULL,
+     batch INTEGER NOT NULL,
+     round INTEGER NOT NULL,
+     question TEXT NOT NULL,
+     answer TEXT NOT NULL,
+     reason TEXT NOT NULL DEFAULT '',
+     edited INTEGER NOT NULL DEFAULT 0,
+     at INTEGER NOT NULL
+   );`,
 ];
 
 type Row = Record<string, unknown>;

@@ -69,6 +69,7 @@ export interface StudioSummary extends Studio { phases: { phase: PhaseKey; state
 export interface StudioPhase {
   phase: PhaseKey; state: PhaseState; model: Model; note: string | null; updatedAt: number
   title: string; doc: string; costPct: number; optional: boolean; busy: boolean
+  autoAnswer: "running" | "review" | null
   status: { ready: boolean; questions: StudioQuestion[]; coverage: { topic: string; done: boolean }[]; summary: string; verdict?: "build" | "narrow" | "dont" } | null
 }
 export interface StudioQuestion {
@@ -79,8 +80,10 @@ export interface StudioQuestion {
 export interface StudioDetail {
   studio: Studio
   phases: StudioPhase[]
-  messages: { id: number; phase: PhaseKey; role: "owner" | "agent" | "system"; text: string; at: number }[]
+  messages: { id: number; phase: PhaseKey; role: "owner" | "agent" | "system" | "standin"; text: string; at: number }[]
+  answers: StudioAnswer[]
   docs: Partial<Record<PhaseKey, string | null>>
   mockups: string[]
   spikes: { key: string; question: string; approach: string }[] | null
 }
+export interface StudioAnswer { id: number; phase: PhaseKey; round: number; question: StudioQuestion; answer: string; reason: string; edited: boolean }

@@ -14,6 +14,12 @@ import { executePlan, getPlan } from '../src/plan.ts';
 import { Secrets } from '../src/secrets.ts';
 import {
   approvePhase,
+  autoInterview,
+  latestAnswers,
+  MAX_STANDIN_ROUNDS,
+  reviewAnswers,
+  stopAutoInterview,
+  studioAnswers,
   createStudio,
   ensureStudioPlan,
   getStudio,
@@ -259,4 +265,77 @@ test('studio interview: questions are structured, plain strings still work, and 
   setStudioMode(ctx, st.id, 'guided');
   await studioTurn(ctx, st.id, 'brief', 'Answers to your questions:\n\n> Which platforms?\nYour call');
   assert.match(prompt(), /Mode: guided[\s\S]*Answers to your questions/);
+});
+
+test('studio skip: a stand-in answers round after round, then the owner reviews; edits go back, no edits approve', async () => {
+  const { ctx, mode, states } = setup();
+  const st = createStudio(ctx, { title: 'Run', mode: 'guided' });
+  mode(st.id, 'brief', 'rounds');
+  await studioTurn(ctx, st.id, 'brief', 'I want a running app');
+  assert.equal(readStatus(ctx, st.id, 'brief')!.questions.length, 2);
+
+  await autoInterview(ctx, st.id, 'brief');
+  const turns = readFileSync(join(studioWork(ctx, st.id), '..', 'turns'), 'utf8').trim().split('\n');
+  assert.deepEqual(turns, ['brief', 'standin-brief', 'brief', 'standin-brief', 'brief']);
+  assert.equal(phaseRow(ctx, st.id, 'brief').autoAnswer, 'review');
+  const answers = studioAnswers(ctx, st.id, 'brief');
+  assert.equal(answers.length, 4);
+  assert.deepEqual(answers.map((a) => a.round), [1, 1, 2, 2]);
+  assert.equal(answers[0]!.answer, 'iPhone');
+  assert.equal(answers[1]!.answer, 'guess for Describe your typical run');
+  const msgs = studioMessages(ctx, st.id, 'brief');
+  assert.deepEqual(msgs.filter((m) => m.role === 'standin').length, 2);
+  assert.match(msgs.find((m) => m.role === 'standin')!.text, /^Answers to your questions:\n\n> Which platforms\?\niPhone/);
+  assert.match(msgs.at(-1)!.text, /Answered 2 rounds for you\. The agent has no more questions\./);
+  // the stand-in saw the owner's words; the phase agent was told the answers come from a stand-in
+  assert.match(readFileSync(join(studioWork(ctx, st.id), '..', 'args-standin-brief'), 'utf8'), /I want a running app[\s\S]*> Which platforms\?\niPhone/);
+  assert.match(readFileSync(join(studioWork(ctx, st.id), '..', 'args-brief'), 'utf8'), /stand-in for the owner/);
+
+  // edits go to the phase agent and end the review
+  const r = reviewAnswers(ctx, st.id, 'brief', [{ id: answers[0]!.id, answer: 'iPhone + web' }, { id: answers[1]!.id, answer: answers[1]!.answer }]);
+  assert.equal(r.approved, false);
+  assert.match(r.message!, /changed these[\s\S]*> Which platforms\?\niPhone \+ web\n\(was: iPhone\)/);
+  assert.doesNotMatch(r.message!, /typical run/);
+  assert.equal(studioAnswers(ctx, st.id, 'brief')[0]!.edited, true);
+  assert.equal(phaseRow(ctx, st.id, 'brief').autoAnswer, null);
+  assert.throws(() => reviewAnswers(ctx, st.id, 'brief', []), /no answers to review/);
+
+  // a second skip with nothing open is refused; with questions and no edits, the review approves and names the next phase
+  await assert.rejects(autoInterview(ctx, st.id, 'brief'), /no open questions/);
+  mode(st.id, 'brief', 'interview');
+  await studioTurn(ctx, st.id, 'brief', 'one more thing');
+  mode(st.id, 'brief', 'done');
+  await autoInterview(ctx, st.id, 'brief');
+  assert.deepEqual(latestAnswers(ctx, st.id, 'brief').map((a) => a.batch), [2, 2]);
+  const ok = reviewAnswers(ctx, st.id, 'brief', []);
+  assert.deepEqual(ok, { message: null, approved: true, next: { phase: 'research', state: 'ready' } });
+  assert.equal(states(st.id).brief, 'approved');
+});
+
+test('studio skip: stops after the round cap, when the owner takes over, and when the stand-in fails', async () => {
+  const { ctx, mode } = setup();
+  const st = createStudio(ctx, { title: 'Run', mode: 'guided' });
+  mode(st.id, 'brief', 'endless');
+  await studioTurn(ctx, st.id, 'brief', 'go');
+  await autoInterview(ctx, st.id, 'brief');
+  assert.equal(new Set(studioAnswers(ctx, st.id, 'brief').map((a) => a.round)).size, MAX_STANDIN_ROUNDS);
+  assert.match(studioMessages(ctx, st.id, 'brief').at(-1)!.text, /stopped after 6 rounds with 2 questions still open/);
+
+  const b = createStudio(ctx, { title: 'B', mode: 'guided' });
+  mode(b.id, 'brief', 'endless');
+  await studioTurn(ctx, b.id, 'brief', 'go');
+  const run = autoInterview(ctx, b.id, 'brief');
+  stopAutoInterview(ctx, b.id, 'brief');
+  await run;
+  assert.equal(phaseRow(ctx, b.id, 'brief').autoAnswer, null);
+  assert.ok(studioAnswers(ctx, b.id, 'brief').length <= 2);
+
+  const c = createStudio(ctx, { title: 'C', mode: 'guided' });
+  mode(c.id, 'brief', 'interview');
+  await studioTurn(ctx, c.id, 'brief', 'go');
+  mode(c.id, 'brief', 'standin-fail');
+  await autoInterview(ctx, c.id, 'brief');
+  assert.equal(phaseRow(ctx, c.id, 'brief').autoAnswer, null);
+  assert.equal(phaseRow(ctx, c.id, 'brief').state, 'drafting');
+  assert.match(studioMessages(ctx, c.id, 'brief').at(-1)!.text, /Couldn't answer for you: the stand-in wrote no answers/);
 });

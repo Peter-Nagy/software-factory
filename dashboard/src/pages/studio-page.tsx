@@ -2,7 +2,7 @@ import { Archive, Check, Clock3, FlaskConical, Loader2, Lock, Maximize2, Minus, 
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { ChatPanel, useDocComments } from "@/components/chat-panel"
-import { Coverage, Interview } from "@/components/interview"
+import { AnswerReview, Coverage, Interview, StandinRunning } from "@/components/interview"
 import { Markdown } from "@/components/markdown"
 import { PlanView } from "@/components/plan-view"
 import { Button } from "@/components/ui/button"
@@ -178,9 +178,12 @@ export function StudioPage({ id }: { id: number }) {
   }
 
   const thinking = phase.busy || phase.state === "thinking"
-  const canApprove = ["drafting", "stale"].includes(phase.state) && !!data.docs[phase.phase] && !thinking && phase.phase !== "plan"
+  const canApprove = ["drafting", "stale"].includes(phase.state) && !!data.docs[phase.phase] && !thinking && phase.phase !== "plan" && !phase.autoAnswer
   const msgs = data.messages.filter((m) => m.phase === phase.phase)
-  const interviewing = !thinking && !!phase.status?.questions.length && ["ready", "drafting", "stale"].includes(phase.state)
+  const standin = phase.autoAnswer
+  const interviewing = !standin && !thinking && !!phase.status?.questions.length && ["ready", "drafting", "stale"].includes(phase.state)
+  const answers = data.answers.filter((a) => a.phase === phase.phase)
+  const nextPhase = phases.slice(phases.indexOf(phase) + 1).find((p) => p.state === "ready" || p.state === "stale" || p.state === "locked")
   const send = async (text: string) => {
     await api("POST", `studios/${id}/messages`, { phase: phase.phase, text })
     await reload()
@@ -246,6 +249,25 @@ export function StudioPage({ id }: { id: number }) {
             agent={`The ${phase.title.toLowerCase()} agent`}
             questions={phase.status!.questions}
             onSend={send}
+            onSkip={() => post("auto-answer", { phase: phase.phase }, "Answering for you; you'll review the answers at the end")}
+          />
+        )}
+        {standin === "running" && (
+          <StandinRunning agent={`the ${phase.title.toLowerCase()} agent`} rounds={new Set(answers.map((a) => a.round)).size} onStop={() => post("stop-answering", { phase: phase.phase })} />
+        )}
+        {standin === "review" && !thinking && (
+          <AnswerReview
+            key={answers.map((a) => a.id).join()}
+            answers={answers}
+            nextTitle={studio.mode === "guided" && nextPhase ? nextPhase.title.toLowerCase() : null}
+            onSubmit={async (edits) => {
+              const r = await api<{ approved: boolean; next: { phase: PhaseKey } | null }>("POST", `studios/${id}/review`, { phase: phase.phase, edits })
+              if (r.approved) {
+                toast.success(`${phase.title} approved`)
+                if (r.next) pick(r.next.phase)
+              } else toast.success("Sent your changes to the agent")
+              await reload()
+            }}
           />
         )}
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
@@ -256,7 +278,7 @@ export function StudioPage({ id }: { id: number }) {
             onModel={(m: Model) => void post("model", { phase: phase.phase, model: m })}
             modelLocked={thinking}
             messages={msgs}
-            thinking={thinking}
+            thinking={thinking || phase.autoAnswer === "running"}
             thinkingText={phase.state === "queued" ? "Queued: starts when the usage budget allows." : `The ${phase.title.toLowerCase()} agent is working… usually 2–6 minutes.`}
             emptyHint={PHASE_HINT[phase.phase]}
             closed={phase.state === "skipped"}

@@ -139,7 +139,7 @@ export function OwnerText({ text }: { text: string }) {
     <>
       {blocks.map((b, i) =>
         b.quote ? (
-          <blockquote key={i} className="my-1 border-l-2 border-primary-foreground/50 pl-2 text-xs whitespace-pre-wrap opacity-80">{b.lines.join("\n")}</blockquote>
+          <blockquote key={i} className="my-1 border-l-2 border-current/40 pl-2 text-xs whitespace-pre-wrap opacity-80">{b.lines.join("\n")}</blockquote>
         ) : (
           <div key={i} className="whitespace-pre-wrap">{b.lines.join("\n").replace(/^\n+|\n+$/g, "")}</div>
         ),

@@ -26,6 +26,8 @@ import { answerQuestion, openQuestions } from '../questions.ts';
 import {
   approvePhase,
   archiveStudio,
+  autoInterview,
+  canAutoAnswer,
   canTalk,
   createStudio,
   ensureStudioPlan,
@@ -39,10 +41,13 @@ import {
   readDoc,
   readSpikes,
   readStatus,
+  reviewAnswers,
   setPhaseModel,
   setStudioMode,
   skipPhase,
   startMessage,
+  stopAutoInterview,
+  latestAnswers,
   studioMessages,
   studioPhases,
   studioTurn,
@@ -434,6 +439,7 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
           docs: Object.fromEntries(PHASES.filter((d) => d.key !== 'plan').map((d) => [d.key, readDoc(ctx, sid, d.doc)])),
           mockups: listMockups(ctx, sid),
           spikes: readSpikes(ctx, sid),
+          answers: PHASES.flatMap((d) => latestAnswers(ctx, sid, d.key)),
         };
       }
       case 'POST studios/:id/messages': {
@@ -467,6 +473,34 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
           throw new HttpError(400, (e as Error).message);
         }
         return;
+      case 'POST studios/:id/auto-answer': {
+        const sid = Number(id);
+        const phase = phaseKey(body.phase);
+        if (!getStudio(ctx, sid)) throw new HttpError(404, `No studio ${id}`);
+        const why = canAutoAnswer(ctx, sid, phase);
+        if (why) throw new HttpError(400, why);
+        void autoInterview(ctx, sid, phase).catch((e: Error) => log(`studio ${sid} ${phase} stand-in: ${e.message}`));
+        return;
+      }
+      case 'POST studios/:id/stop-answering':
+        stopAutoInterview(ctx, Number(id), phaseKey(body.phase));
+        return;
+      case 'POST studios/:id/review': {
+        const sid = Number(id);
+        const phase = phaseKey(body.phase);
+        const edits = Array.isArray(body.edits)
+          ? body.edits.filter((e): e is { id: number; answer: string } => !!e && typeof e === 'object' && typeof (e as { id: unknown }).id === 'number' && typeof (e as { answer: unknown }).answer === 'string')
+          : [];
+        let r: ReturnType<typeof reviewAnswers>;
+        try {
+          r = reviewAnswers(ctx, sid, phase, edits);
+        } catch (e) {
+          throw new HttpError(400, (e as Error).message);
+        }
+        if (r.message) studioInBackground(sid, phase, r.message);
+        else if (r.next) studioInBackground(sid, r.next.phase, startMessage(r.next.phase, r.next.state, false));
+        return r;
+      }
       case 'POST studios/:id/mode':
         setStudioMode(ctx, Number(id), body.mode === 'autopilot' ? 'autopilot' : 'guided');
         return;

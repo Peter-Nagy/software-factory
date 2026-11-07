@@ -11,6 +11,15 @@ for a in "$@"; do
   prev="$a"
 done
 MODE=$(cat "$WORK/../mode-$PHASE" 2>/dev/null || echo done)
+# The stand-in: answers every open question ("first option" or a free-text guess).
+if [[ " $* " == *" factory.standin=1 "* ]]; then
+  echo "standin-$PHASE" >> "$WORK/../turns"
+  echo "$*" > "$WORK/../args-standin-$PHASE"
+  [ "$MODE" = "standin-fail" ] && { echo '{"type":"result","subtype":"success","is_error":false,"session_id":"st","result":"nope","num_turns":1}'; exit 0; }
+  node -e 'const fs=require("fs");const [w,p]=process.argv.slice(1);const q=JSON.parse(fs.readFileSync(w+"/status/"+p+".json","utf8")).questions;fs.writeFileSync(w+"/status/"+p+".answers.json",JSON.stringify(q.map(x=>typeof x==="string"?{answer:"guess for "+x,reason:"guess"}:{answer:(x.options[0]||{label:"x"}).label,reason:"recommended"})))' "$WORK" "$PHASE"
+  echo '{"type":"result","subtype":"success","is_error":false,"session_id":"st","result":"Answered.","num_turns":2}'
+  exit 0
+fi
 echo "$PHASE" >> "$WORK/../turns"
 echo "$*" > "$WORK/../args-$PHASE"
 echo '{"type":"system","subtype":"init","session_id":"sess-'"$PHASE"'"}'
@@ -33,6 +42,12 @@ case "$PHASE" in
     ;;
   spikes) printf '# Spikes\n\nbackground-gps: yes (unverified)\n' > "$WORK/docs/SPIKES.md" ;;
 esac
+# "rounds": asks until it has seen two rounds of answers, then is done; "endless": always asks.
+if [ "$MODE" = "rounds" ]; then
+  n=$(grep -c "^$PHASE\$" "$WORK/../turns" || true)
+  if [ "$n" -ge 3 ]; then MODE=done; else MODE=interview; fi
+fi
+[ "$MODE" = "endless" ] && MODE=interview
 case "$MODE" in
   questions) echo '{"ready": false, "questions": ["Which platform?"], "summary": "need input"}' > "$WORK/status/$PHASE.json" ;;
   interview) echo '{"ready": false, "summary": "asking", "coverage": [{"topic": "Who", "done": true}, {"topic": "Platforms", "done": false}], "questions": [{"header": "Platform", "question": "Which platforms?", "options": [{"label": "iPhone", "description": "Fastest"}, {"label": "Web"}], "recommended": "iPhone"}, "Describe your typical run"]}' > "$WORK/status/$PHASE.json" ;;
