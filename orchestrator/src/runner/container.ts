@@ -1,8 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { createWriteStream } from 'node:fs';
-import { createInterface } from 'node:readline';
-import { StreamParser } from '../claude.ts';
 import type { RunResult } from '../types.ts';
+import { runToEnd, streamAgent, type CommandResult, type ProcessSpec } from './process.ts';
 
 export interface ContainerSpec {
   name: string; // unique per run, e.g. factory-habit-tracker-12-a1
@@ -87,52 +85,21 @@ export interface RunOptions {
   docker?: string; // binary, default "docker"
 }
 
-/** Run one agent in a fresh container, stream its output to a log file and fold it into a RunResult. */
-export function runInContainer(spec: ContainerSpec, claudeArgs: string[], opts: RunOptions): Promise<RunResult> {
+function dockerProcess(spec: ContainerSpec, command: string[], opts: { env: Record<string, string>; docker?: string }): ProcessSpec {
   const docker = opts.docker ?? process.env.FACTORY_DOCKER_BIN ?? 'docker';
   const missing = spec.envNames.filter((n) => opts.env[n] === undefined);
-  if (missing.length) return Promise.reject(new Error(`Missing values for env: ${missing.join(', ')}`));
+  if (missing.length) throw new Error(`Missing values for env: ${missing.join(', ')}`);
+  return {
+    cmd: docker,
+    args: dockerCommandArgs(spec, command),
+    env: opts.env,
+    kill: () => void spawn(docker, ['kill', spec.name], { stdio: 'ignore' }),
+  };
+}
 
-  return new Promise((resolve, reject) => {
-    const child = spawn(docker, dockerRunArgs(spec, claudeArgs), {
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/tmp', ...opts.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    const log = createWriteStream(opts.logPath, { flags: 'a' });
-    const parser = new StreamParser();
-    parser.onSession = opts.onSession;
-    let timedOut = false;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      spawn(docker, ['kill', spec.name], { stdio: 'ignore' });
-    }, opts.timeoutMs);
-
-    createInterface({ input: child.stdout }).on('line', (line) => {
-      log.write(line + '\n');
-      parser.push(line);
-      opts.onLine?.(line);
-    });
-    let stderrTail = '';
-    createInterface({ input: child.stderr }).on('line', (line) => {
-      log.write(`[stderr] ${line}\n`);
-      stderrTail = `${stderrTail}${line}\n`.slice(-2000);
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      log.end();
-      reject(err);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      log.end();
-      const result = parser.finish(timedOut);
-      // The agent never reported a result: surface why (e.g. the container failed to start).
-      if (!result.completed && !result.resultText) result.resultText = `exit ${code}: ${stderrTail.trim() || 'no output'}`;
-      resolve(result);
-    });
-  });
+/** Run one agent in a fresh container, stream its output to a log file and fold it into a RunResult. */
+export async function runInContainer(spec: ContainerSpec, claudeArgs: string[], opts: RunOptions): Promise<RunResult> {
+  return streamAgent(dockerProcess(spec, ['claude', ...claudeArgs], opts), opts);
 }
 
 /** Remove containers left over from a previous orchestrator process (after a crash or a forced exit). */
@@ -147,47 +114,9 @@ export function removeVolume(name: string, docker = process.env.FACTORY_DOCKER_B
   spawnSync(docker, ['volume', 'rm', '-f', name], { stdio: 'ignore' });
 }
 
-export interface CommandResult {
-  exitCode: number | null;
-  timedOut: boolean;
-  /** Last ~8 KB of combined output, for failure reports. */
-  tail: string;
-  durationMs: number;
-}
+export type { CommandResult } from './process.ts';
 
 /** Run a plain command in a fresh container. The exit code is the verdict: nothing inside can fake it. */
-export function runCommandInContainer(spec: ContainerSpec, command: string[], opts: Omit<RunOptions, 'onSession'>): Promise<CommandResult> {
-  const docker = opts.docker ?? process.env.FACTORY_DOCKER_BIN ?? 'docker';
-  const missing = spec.envNames.filter((n) => opts.env[n] === undefined);
-  if (missing.length) return Promise.reject(new Error(`Missing values for env: ${missing.join(', ')}`));
-  return new Promise((resolve, reject) => {
-    const started = Date.now();
-    const child = spawn(docker, dockerCommandArgs(spec, command), {
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/tmp', ...opts.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    const log = createWriteStream(opts.logPath, { flags: 'a' });
-    let tail = '';
-    const keep = (chunk: Buffer) => {
-      log.write(chunk);
-      tail = (tail + chunk.toString()).slice(-8192);
-    };
-    child.stdout.on('data', keep);
-    child.stderr.on('data', keep);
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      spawn(docker, ['kill', spec.name], { stdio: 'ignore' });
-    }, opts.timeoutMs);
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      log.end();
-      reject(e);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      log.end();
-      resolve({ exitCode: code, timedOut, tail, durationMs: Date.now() - started });
-    });
-  });
+export async function runCommandInContainer(spec: ContainerSpec, command: string[], opts: Omit<RunOptions, 'onSession'>): Promise<CommandResult> {
+  return runToEnd(dockerProcess(spec, command, opts), opts);
 }

@@ -11,7 +11,7 @@ import {
   REPORT_DIR_IN_CONTAINER,
   reportProblem,
   RUN_DIR,
-  runnerFor,
+  CHECK_ORDER,
   testCountProblem,
   testsRemovedReason,
   TESTS_REMOVED_TRAILER,
@@ -29,10 +29,11 @@ import {
   type StepOutcome,
 } from './gates/plan.ts';
 import { ORCHESTRATOR_PERMISSIONS, STATUS_CONTEXTS } from './github.ts';
-import { handleFailure, loadProjectConfig, MACOS_RUNNER_AVAILABLE, MAX_INTERRUPTIONS, NEEDS_MACOS, type PipelineContext } from './pipeline.ts';
+import { handleFailure, loadProjectConfig, MAX_INTERRUPTIONS, NEEDS_MACOS, projectRunner, worktreeRoot, type PipelineContext } from './pipeline.ts';
 import { promptPath, reviewerModel, roleConfig } from './roles.ts';
 import { removeVolume, runCommandInContainer, runInContainer } from './runner/container.ts';
 import { projectImage } from './runner/image.ts';
+import { createSimulator, deleteSimulator, runCommandOnMac } from './runner/macos.ts';
 import { changedFiles, changePatchId, checkoutPath, containsBase, diffSize, git, gitRemote, headSha, prepareCheckout, redact } from './runner/worktree.ts';
 import { branchName } from './tasks.ts';
 import type { Model, Project, RunResult, Task } from './types.ts';
@@ -79,7 +80,13 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
   const { gh, token } = await ctx.repoAccess(project, ORCHESTRATOR_PERMISSIONS);
   const clean = (t: string) => redact(t, token);
   const branch = task.branch ?? branchName(task.issueNumber, task.title);
-  const dir = checkoutPath(config.paths.worktrees, project.id, `${task.issueNumber}`);
+  const runner = await projectRunner(gh, project);
+  if (runner === 'macos' && !config.macos.enabled) {
+    store.transition(task.id, 'parked', { lastFailure: NEEDS_MACOS });
+    await ctx.notify('alert', `Parked ${task.id}: ${NEEDS_MACOS}`);
+    return 'parked';
+  }
+  const dir = checkoutPath(worktreeRoot(config, runner), project.id, `${task.issueNumber}`);
   const remoteUrl = ctx.remoteUrl?.(project) ?? `https://github.com/${project.owner}/${project.id}.git`;
   await prepareCheckout({ remoteUrl, dir, branch, token });
   const prNumber = task.prNumber;
@@ -102,11 +109,6 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
   const patchId = await changePatchId(dir);
   const files = await changedFiles(dir);
   const projectConfig = await loadProjectConfig(dir);
-  if (runnerFor(projectConfig) === 'macos' && !MACOS_RUNNER_AVAILABLE) {
-    store.transition(task.id, 'parked', { lastFailure: NEEDS_MACOS });
-    await ctx.notify('alert', `Parked ${task.id}: ${NEEDS_MACOS}`);
-    return 'parked';
-  }
 
   // 2a. Protected files: the gates' own definitions. Agents must not change them.
   const touched = protectedChanges(files);
@@ -153,28 +155,45 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
     }
     mkdirSync(config.paths.logs, { recursive: true });
     const logPath = join(config.paths.logs, `${project.id}-${task.issueNumber}-gates-${Date.now()}.log`);
-    let image;
-    try {
-      image = await projectImage({ dir, projectId: project.id, baseImage: config.worker.image, timeoutMs: projectConfig.gates.imageBuildTimeoutMinutes * 60_000, logPath });
-    } catch (e) {
-      return interruption(ctx, task, `image error: ${(e as Error).message}`);
+    // Linux: the project's toolchain image. macOS: project checks run on the macOS runner with the host's Xcode,
+    // and only the security scans use the worker image.
+    let image = { image: config.worker.image, problem: null as string | null };
+    if (runner === 'linux') {
+      try {
+        image = await projectImage({ dir, projectId: project.id, baseImage: config.worker.image, timeoutMs: projectConfig.gates.imageBuildTimeoutMinutes * 60_000, logPath });
+      } catch (e) {
+        return interruption(ctx, task, `image error: ${(e as Error).message}`);
+      }
+      if (image.problem) return fail('Toolchain image failed', clean(image.problem));
     }
-    if (image.problem) return fail('Toolchain image failed', clean(image.problem));
 
     const secrets = await ctx.secrets.getMany(projectConfig.secrets);
     const runTag = `${project.id}-${task.issueNumber}-${Date.now()}`.toLowerCase().replace(/[^a-z0-9_.-]/g, '-');
     const homeVolume = `factory-gates-${runTag}`;
     const outcomes: StepOutcome[] = [];
     let testsRan: number | null = null;
+    let simulator: string | null = null;
     try {
+      if (runner === 'macos') {
+        const sim = await createSimulator(config.macos, dir, `factory-gates-${runTag}`, logPath);
+        simulator = sim.udid;
+        if (!sim.udid) store.event('task.simulator_error', task.id, { error: clean(sim.error ?? '') });
+      }
       for (const step of steps) {
         const reportDir = join(dir, RUN_DIR, 'reports', step.name);
         rmSync(reportDir, { recursive: true, force: true });
         mkdirSync(reportDir, { recursive: true });
-        const env = { ...secrets, FACTORY_REPORT_DIR: `${REPORT_DIR_IN_CONTAINER}/${step.name}` };
+        const onMac = runner === 'macos' && CHECK_ORDER.includes(step.name as CheckName);
+        const env = {
+          ...secrets,
+          FACTORY_REPORT_DIR: onMac ? reportDir : `${REPORT_DIR_IN_CONTAINER}/${step.name}`,
+          ...(onMac && simulator ? { FACTORY_SIMULATOR: simulator } : {}),
+        };
         let r;
         try {
-          r = await runCommandInContainer(
+          r = onMac
+            ? await runCommandOnMac(config.macos, dir, ['bash', '-lc', step.command], env, { timeoutMs: projectConfig.gates.timeoutMinutes * 60_000, logPath })
+            : await runCommandInContainer(
             {
               name: `factory-gate-${runTag}-${step.name}`,
               image: image.image,
@@ -209,6 +228,7 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
       }
     } finally {
       removeVolume(homeVolume);
+      if (simulator) await deleteSimulator(config.macos, dir, simulator, logPath);
     }
     // The test count may not drop below main's without a stated reason.
     const testOutcome = outcomes.find((o) => o.name === 'test');

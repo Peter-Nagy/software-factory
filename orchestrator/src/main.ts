@@ -1,4 +1,4 @@
-import { createApp, recoverInterrupted, syncIssues } from './app.ts';
+import { createApp, recoverInterrupted, stopAllRunners, syncIssues } from './app.ts';
 import { runBuild } from './pipeline.ts';
 import { startDashboard } from './dashboard/server.ts';
 import { Bot } from './discord/bot.ts';
@@ -6,7 +6,6 @@ import { containerIntake } from './discord/intake.ts';
 import { DiscordRest } from './discord/rest.ts';
 import { applyTimeouts } from './questions.ts';
 import { ghRepoCreator } from './repo-create.ts';
-import { killLeftoverContainers } from './runner/container.ts';
 import { REVIEW_COST_PCT, reviewModelGuess, runReviewStage } from './review.ts';
 import { schedule, scheduleReviews } from './scheduler.ts';
 
@@ -56,7 +55,7 @@ async function main(): Promise<void> {
     stopping = true;
     console.log(`Stopping: waiting for ${running.size} running task(s). Send SIGTERM again to exit now.`);
     process.once('SIGTERM', () => {
-      killLeftoverContainers(); // don't leave agents running without an orchestrator
+      stopAllRunners(app.config); // don't leave agents running without an orchestrator
       process.exit(143);
     });
   };

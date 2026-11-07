@@ -31,6 +31,12 @@ worker:
   memoryGb: 6
   claudeTokenEnv: CLAUDE_CODE_OAUTH_TOKEN # also the secret name in the Factory vault
 
+# macOS runner for iOS / Apple projects. Run `sudo ops/setup-macos-runner.sh` first, then enable.
+macos:
+  enabled: false
+  user: factory-ios
+  root: /Users/Shared/factory-macos
+
 # Per-role overrides (model, effort, maxTurns, timeoutMinutes, maxBudgetUsd)
 roles:
   implementer:

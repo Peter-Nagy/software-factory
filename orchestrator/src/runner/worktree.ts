@@ -28,12 +28,36 @@ export function redact(text: string, token: string | null): string {
   return text.split(token).join('[redacted]').split(basic).join('[redacted]');
 }
 
+/**
+ * Checkouts under these roots are shared with the macOS runner user (same group): git runs there with umask 002
+ * so the runner can write what the orchestrator checks out, and trusts repos owned by the other user.
+ */
+const sharedRoots: string[] = [];
+export function shareWorktreesUnder(root: string): void {
+  const r = root.endsWith('/') ? root : `${root}/`;
+  if (!sharedRoots.includes(r)) sharedRoots.push(r);
+}
+export const isShared = (dir: string) => sharedRoots.some((r) => `${dir}/`.startsWith(r));
+
+function configEnv(pairs: [string, string][]): Record<string, string> {
+  const env: Record<string, string> = { GIT_CONFIG_COUNT: String(pairs.length) };
+  pairs.forEach(([k, v], i) => {
+    env[`GIT_CONFIG_KEY_${i}`] = k;
+    env[`GIT_CONFIG_VALUE_${i}`] = v;
+  });
+  return env;
+}
+
 async function run(cwd: string, args: string[], token: string | null): Promise<string> {
+  const shared = isShared(cwd);
+  const pairs: [string, string][] = [];
+  if (token) pairs.push(['http.extraHeader', authEnv(token).GIT_CONFIG_VALUE_0!]);
+  if (shared) pairs.push(['safe.directory', '*'], ['core.sharedRepository', 'group']);
   try {
-    const { stdout } = await exec('git', args, {
+    const { stdout } = await exec(shared ? '/bin/sh' : 'git', shared ? ['-c', 'umask 002 && exec git "$@"', 'git', ...args] : args, {
       cwd,
       maxBuffer: 64 * 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...authEnv(token) },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(pairs.length ? configEnv(pairs) : {}) },
     });
     return stdout.trim();
   } catch (e) {
@@ -67,7 +91,7 @@ export async function prepareCheckout(opts: { remoteUrl: string; dir: string; br
   const base = opts.base ?? 'main';
   const { dir, branch, token } = opts;
   if (!existsSync(join(dir, '.git'))) {
-    mkdirSync(dirname(dir), { recursive: true });
+    mkdirSync(dirname(dir), { recursive: true, mode: isShared(dir) ? 0o2775 : 0o777 });
     await gitRemote(dirname(dir), token, 'clone', '--no-checkout', opts.remoteUrl, dir);
   }
   await gitRemote(dir, token, 'fetch', '--prune', 'origin');

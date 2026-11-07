@@ -71,6 +71,17 @@ export const FactoryConfigSchema = z.object({
       claudeTokenEnv: z.string().default('CLAUDE_CODE_OAUTH_TOKEN'),
     })
     .default({}),
+  /**
+   * The macOS runner for Apple-platform projects (ops/setup-macos-runner.sh). Agents and project checks run as a
+   * separate user through a root-owned script, inside a sandbox profile; security scans and reviews stay in Docker.
+   */
+  macos: z
+    .object({
+      enabled: z.boolean().default(false),
+      user: z.string().regex(/^[a-z][a-z0-9_-]*$/).default('factory-ios'),
+      root: z.string().default('/Users/Shared/factory-macos'),
+    })
+    .default({}),
   roles: z.record(z.string(), RoleConfigSchema.partial()).default({}),
   questions: z
     .object({

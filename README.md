@@ -17,7 +17,8 @@ turn ideas and GitHub issues into tested, reviewed and deployed apps while you'r
 | M3 governor live: usage probe, own-use detection | Usage readings live from every run; own-use detection next |
 | M4 Discord: intake, questions with buttons, approvals, alerts, daily digest, slash commands | Built and tested; needs your bot token to go live |
 | Dashboard: board, project pages with goals, plan mode (M5 planning), activity | Built |
-| M6 deploy · M7 iOS · M8 maintenance · M10 self-improvement · M11 hardening | Planned |
+| M7 macOS runner | Built and tested with fakes; needs `sudo ops/setup-macos-runner.sh` |
+| M6 deploy · M8 maintenance · M10 self-improvement · M11 hardening | Planned |
 
 ## Check contract
 
@@ -30,7 +31,11 @@ The factory doesn't know any languages. Each project defines its checks for its 
 - `.factory/Dockerfile` (optional) adds the project's toolchain; its final stage must be `FROM factory-worker:current`.
   It's built with only `.factory/` as context and cached by its contents. Agents and gates both run in that image.
 - Agents may change `.factory/`. The reviewer is told to reject any change that weakens a check.
-- `runner: macos` (the default for `kind: ios`) sends tasks to the macOS runner; until M7 exists those tasks wait parked.
+- `runner: macos` (the default for `kind: ios`) sends tasks to the macOS runner: a hidden `factory-ios` user that can't read
+  your home, reached through one root-owned script (`sudo -u factory-ios /Users/Shared/factory-macos/bin/run`), with
+  everything inside a sandbox profile (`ops/macos-runner/sandbox.sb`). It uses the Mac's Xcode, so no Dockerfile; each agent
+  run and each gate run gets its own Simulator device in `$FACTORY_SIMULATOR`. Security scans and reviews stay in Docker.
+  Set up with `sudo ops/setup-macos-runner.sh`, then `macos: {enabled: true}` in the factory config; until then those tasks wait parked.
 - Secrets, dependency and code scans (gitleaks, osv-scanner, semgrep) stay owned by the factory and work across stacks.
 
 ## Layout

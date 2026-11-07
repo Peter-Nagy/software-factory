@@ -72,8 +72,10 @@ export function parseChecks(text: string | null): Checks {
   return r.data;
 }
 
+export type Runner = 'linux' | 'macos';
+
 /** iOS and macOS apps need Xcode: their tasks run on the macOS runner. */
-export function runnerFor(cfg: ProjectConfig): 'linux' | 'macos' {
+export function runnerFor(cfg: ProjectConfig): Runner {
   return cfg.runner ?? (cfg.kind === 'ios' ? 'macos' : 'linux');
 }
 

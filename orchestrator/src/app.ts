@@ -6,6 +6,8 @@ import { appJwt, GitHub, WORKER_PERMISSIONS, type RepoPermissions } from './gith
 import { taskFromIssue } from './issues.ts';
 import type { PipelineContext } from './pipeline.ts';
 import { killLeftoverContainers } from './runner/container.ts';
+import { cleanupMac, syncWorkerConfig, worktreesDir as macWorktreesDir } from './runner/macos.ts';
+import { shareWorktreesUnder } from './runner/worktree.ts';
 import { Secrets } from './secrets.ts';
 import type { Project } from './types.ts';
 
@@ -21,6 +23,7 @@ export async function createApp(config: FactoryConfig = loadFactoryConfig()): Pr
   mkdirSync(config.paths.logs, { recursive: true });
   const store = new Store(join(config.paths.state, 'factory.db'));
   const secrets = new Secrets();
+  if (config.macos.enabled) shareWorktreesUnder(macWorktreesDir(config.macos));
 
   let privateKey: string | null = null;
   const loadKey = async () => {
@@ -76,12 +79,19 @@ export async function syncIssues(app: App): Promise<number> {
   return count;
 }
 
+/** Stop every agent and check still running: containers, and the macOS runner's processes and Simulators. */
+export function stopAllRunners(config: FactoryConfig): void {
+  killLeftoverContainers();
+  if (config.macos.enabled) cleanupMac(config.macos);
+}
+
 /**
  * On startup: remove containers a previous process left running (so two agents never share a checkout),
  * then put interrupted runs back in the queue. They continue their attempt and session; nothing is charged to the ladder.
  */
 export function recoverInterrupted(app: App): string[] {
-  killLeftoverContainers();
+  stopAllRunners(app.config);
+  if (app.config.macos.enabled) syncWorkerConfig(app.config.macos, app.config.paths.workerConfig);
   const recovered: string[] = [];
   for (const t of app.store.openTasks()) {
     if (t.state === 'building' || t.state === 'fixing') {

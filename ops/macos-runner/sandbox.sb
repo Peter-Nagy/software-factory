@@ -1,0 +1,18 @@
+;; Sandbox for everything the macOS runner starts: agents and project checks (xcodebuild, tests).
+;; Parameters (set by bin/run, never by the caller): OWNER_HOME, WORKTREE, HOME.
+;; Later rules win over earlier ones.
+(version 1)
+(allow default)
+
+;; Writes only to the task's checkout, the runner user's home (Xcode DerivedData, Simulator devices, caches),
+;; temp dirs and devices.
+(deny file-write*)
+(allow file-write*
+  (subpath (param "WORKTREE"))
+  (subpath (param "HOME"))
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders")
+  (subpath "/dev"))
+
+;; The owner's home is off limits entirely: code, keychains, the 1Password token, the factory's state.
+(deny file-read* file-write* (subpath (param "OWNER_HOME")))

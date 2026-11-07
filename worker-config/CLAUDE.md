@@ -10,6 +10,9 @@ You run unattended inside a disposable container. Nobody can answer questions du
   `.factory/Dockerfile` (final stage `FROM factory-worker:current`). You may improve them, but never weaken them: no skipped or
   excluded tests, no commands that pass without running the tool. `test` and `e2e` must write JUnit XML to `$FACTORY_REPORT_DIR`.
   The reviewer rejects weakened checks, and the gates fail if no tests ran or the test count drops.
+- On the macOS runner (`FACTORY_RUNNER=macos`: iOS and other Apple projects) you run as a separate user in a sandbox,
+  with the Mac's Xcode. There's no Dockerfile there. Use the Simulator in `$FACTORY_SIMULATOR` (a device UDID), e.g.
+  `xcodebuild test -destination "id=$FACTORY_SIMULATOR"`; the checks get their own device the same way. Never boot others.
 - Never print, log or commit secrets or environment variables. Secrets come in as env vars; read them by name in code only.
 - Prefer the project's existing libraries and patterns. Adding a dependency needs a reason in the PR summary.
 - If a product decision is truly needed and the docs don't answer it, write `.factory-run/question.json`

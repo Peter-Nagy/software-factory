@@ -1,0 +1,69 @@
+#!/bin/bash
+# Factory macOS runner. Runs one agent or check command as the runner user, inside the sandbox profile.
+# Installed root-owned at /Users/Shared/factory-macos/bin/run by ops/setup-macos-runner.sh; sudoers lets the
+# owner run exactly this file as the runner user, nothing else.
+#
+#   run <worktree> -- <command> [args...]   env vars for the command as a JSON object on stdin
+#   run --cleanup                         stop everything the runner user is running
+set -euo pipefail
+umask 002
+ROOT=/Users/Shared/factory-macos
+BIN="$ROOT/bin"
+ME=$(id -un)
+export HOME="/Users/$ME"
+cd "$HOME"
+OWNER_HOME=$(cat "$BIN/owner-home") # written by the setup script; never taken from the caller
+
+if [ "${1:-}" = "--cleanup" ]; then
+  for pid in $(pgrep -U "$(id -u)" || true); do [ "$pid" != "$$" ] && kill -KILL "$pid" 2>/dev/null || true; done
+  export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+  xcrun simctl delete all >/dev/null 2>&1 || true # every device belongs to some task, and none is running now
+  exit 0
+fi
+
+[ "$#" -ge 3 ] && [ "$2" = "--" ] || { echo "usage: run <worktree> -- <command...>" >&2; exit 64; }
+WT=$(cd "$1" && pwd -P) || { echo "no such worktree: $1" >&2; exit 64; }
+case "$WT/" in "$ROOT/worktrees/"?*/?*/) ;; *) echo "worktree must be inside $ROOT/worktrees: $WT" >&2; exit 64 ;; esac
+shift 2
+
+# A clean env: only the basics, then the caller's variables (secrets) from stdin. Names that change how
+# programs load or run are refused.
+for v in $(env | cut -d= -f1); do case "$v" in HOME|USER|LOGNAME|TMPDIR) ;; *) unset "$v" 2>/dev/null || true ;; esac; done
+export USER="$ME" LOGNAME="$ME" SHELL=/bin/bash LANG=en_US.UTF-8
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export FACTORY_RUNNER=macos
+json=$(cat)
+while IFS= read -r -d '' k && IFS= read -r -d '' v; do
+  [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || { echo "invalid env name: $k" >&2; exit 64; }
+  case "$k" in PATH|HOME|USER|LOGNAME|SHELL|TMPDIR|BASH_ENV|ENV|IFS|PS4|DYLD_*|LD_*|GIT_*|SSH_*|SUDO_*|FACTORY_RUNNER) echo "refused env name: $k" >&2; exit 64 ;; esac
+  export "$k=$v"
+done < <(printf '%s' "${json:-'{}'}" | /usr/bin/jq -j 'to_entries[] | .key, "\u0000", (.value|tostring), "\u0000"')
+
+# The worker's Claude config (read-only copy the orchestrator keeps in $ROOT/config), like the container entrypoint.
+mkdir -p "$HOME/.claude"
+for item in settings.json CLAUDE.md skills agents; do
+  if [ -e "$ROOT/config/worker-config/$item" ]; then rm -rf "${HOME:?}/.claude/$item"; cp -R "$ROOT/config/worker-config/$item" "$HOME/.claude/$item"; fi
+done
+[ -f "$HOME/.claude.json" ] || echo '{"hasCompletedOnboarding": true}' > "$HOME/.claude.json"
+git config --global user.name "factory-bot"
+git config --global user.email "factory-bot@users.noreply.github.com"
+git config --global init.defaultBranch main
+git config --global --replace-all safe.directory '*'
+git config --global core.sharedRepository group
+if [ -n "${GH_TOKEN:-}" ]; then
+  git config --global credential.helper '!f() { echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f'
+else
+  git config --global --unset-all credential.helper 2>/dev/null || true
+fi
+
+cd "$WT"
+set -m # the command gets its own process group, so a stop reaches everything it started
+/usr/bin/sandbox-exec -f "$BIN/sandbox.sb" -D OWNER_HOME="$OWNER_HOME" -D WORKTREE="$WT" -D HOME="$HOME" "$@" </dev/null &
+child=$!
+trap 'kill -TERM -- -"$child" 2>/dev/null; sleep 5; kill -KILL -- -"$child" 2>/dev/null' TERM INT HUP
+set +e
+wait "$child"
+code=$?
+# wait returns early when a trapped signal arrives; wait again for the real exit status
+while kill -0 "$child" 2>/dev/null; do wait "$child"; code=$?; done
+exit "$code"

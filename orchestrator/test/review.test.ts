@@ -9,7 +9,7 @@ import { parseFactoryConfig, parseProjectConfig, GovernorConfigSchema } from '..
 import { Store } from '../src/db.ts';
 import { formatReviewFailure, gateSteps, protectedChanges, reviewPasses } from '../src/gates/plan.ts';
 import { ContractError, countJunit, dockerfileProblem, e2eRequired, parseChecks, reportProblem, runnerFor, testCountProblem, testsRemovedReason } from '../src/gates/contract.ts';
-import { excludeRunDir } from '../src/runner/worktree.ts';
+import { excludeRunDir, shareWorktreesUnder } from '../src/runner/worktree.ts';
 import type { GitHub } from '../src/github.ts';
 import { taskFromIssue } from '../src/issues.ts';
 import { runBuild, type PipelineContext } from '../src/pipeline.ts';
@@ -21,6 +21,8 @@ import type { Project, Task } from '../src/types.ts';
 const fixture = (n: string) => fileURLToPath(new URL(`./fixtures/${n}`, import.meta.url));
 const agentDocker = fixture('fake-docker.sh');
 const reviewDocker = fixture('fake-docker-review.sh');
+const fakeSudo = fixture('fake-sudo.sh');
+chmodSync(fakeSudo, 0o755);
 chmodSync(agentDocker, 0o755);
 chmodSync(reviewDocker, 0o755);
 
@@ -137,6 +139,13 @@ function setup() {
   const comments: string[] = [];
   const merges: { pr: number; sha: string }[] = [];
   const fakeGh = {
+    readFile: async (_o: string, _r: string, path: string) => {
+      try {
+        return g(origin, 'show', `main:${path}`);
+      } catch {
+        return null;
+      }
+    },
     findOpenPullRequest: async () => null,
     createPullRequest: async () => ({ number: 41, html_url: 'x' }),
     setStatus: async (_o: string, _r: string, sha: string, s: { state: string; context: string; description?: string }) => void statuses.push({ sha, ...s }),
@@ -339,4 +348,37 @@ test('contract: macOS projects wait parked instead of running in a Linux contain
   assert.equal(t.state, 'parked');
   assert.match(t.lastFailure!, /macOS runner/);
   assert.equal(existsSync(join(s.root, 'argsseen')), false); // no agent ran
+});
+
+test('macOS runner: agent and project checks run through the runner with a Simulator each, scans stay in Docker', async () => {
+  const s = setup();
+  s.g(s.seed, 'pull', '-q', s.origin, 'main');
+  writeFileSync(join(s.seed, 'factory.yaml'), 'kind: ios\nsecrets: [APP_SECRET]\n');
+  s.g(s.seed, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qam', 'ios');
+  s.g(s.seed, 'push', '-q', s.origin, 'main');
+  s.ctx.config = { ...s.ctx.config, macos: { enabled: true, user: 'factory-ios', root: s.root } };
+  shareWorktreesUnder(join(s.root, 'worktrees'));
+  process.env.FACTORY_SUDO_BIN = fakeSudo;
+  try {
+    await built(s, 30);
+    const calls = () => readFileSync(join(s.root, 'sudocalls'), 'utf8').trim().split('\n');
+    const agent = calls().find((c) => c.split('|')[2] === 'claude')!;
+    const [run, wt, , envNames, sim] = agent.split('|');
+    assert.equal(run, join(s.root, 'bin', 'run'));
+    assert.equal(wt, join(s.root, 'worktrees', 'app', '30'));
+    assert.deepEqual(envNames!.split(','), ['APP_SECRET', 'CLAUDE_CODE_OAUTH_TOKEN', 'FACTORY_SIMULATOR', 'GH_TOKEN']);
+    assert.equal(sim, '0A1B2C3D-0000-4000-8000-000000000001');
+    assert.doesNotMatch(readFileSync(join(s.root, 'argsseen'), 'utf8'), /value-of/); // secrets never on a command line
+    assert.match(readFileSync(join(s.root, 'simulators'), 'utf8'), /simctl delete 0A1B2C3D/);
+
+    s.write('review-mode', 'review=approve');
+    assert.equal(await review(s, 30), 'merged');
+    const gates = calls().filter((c) => c.split('|')[3]!.includes('FACTORY_REPORT_DIR'));
+    assert.equal(gates.length, 5); // setup, build, lint, test, e2e on the runner ...
+    assert.ok(gates.every((c) => c.endsWith('|0A1B2C3D-0000-4000-8000-000000000001')));
+    assert.equal(s.count('gatesrun'), 8); // ... and the three security scans in Docker
+    assert.equal(s.store.getSetting('testCount:app'), '3');
+  } finally {
+    delete process.env.FACTORY_SUDO_BIN;
+  }
 });

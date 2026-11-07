@@ -28,7 +28,7 @@ for a in "$@"; do
   fi
   prev="$a"
 done
-ROOT="$WORK/../../.."
+ROOT="${FAKE_ROOT:-$WORK/../../..}"
 MODE_FILE="$ROOT/review-mode"
 want() { grep -qx "$1" "$MODE_FILE" 2>/dev/null; }
 if [ -n "$GATE" ]; then
@@ -38,7 +38,7 @@ if [ -n "$GATE" ]; then
   if [ "$GATE" = "test" ] || [ "$GATE" = "e2e" ]; then
     if ! want "noreport"; then
       n=$(grep -E '^tests=' "$MODE_FILE" 2>/dev/null | cut -d= -f2 || true); n=${n:-3}
-      dir="$WORK${FACTORY_REPORT_DIR#/work}"
+      case "$FACTORY_REPORT_DIR" in /work/*) dir="$WORK${FACTORY_REPORT_DIR#/work}" ;; *) dir="$FACTORY_REPORT_DIR" ;; esac
       { echo '<testsuites><testsuite name="s">'; i=0; while [ "$i" -lt "$n" ]; do i=$((i+1)); echo "<testcase name=\"t$i\"/>"; done; echo '</testsuite></testsuites>'; } > "$dir/junit.xml"
     fi
   fi

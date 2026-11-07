@@ -13,7 +13,7 @@ done
 [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || { echo "token not passed" >&2; exit 3; }
 cd "$WORK"
 # The runner passes only whitelisted env vars, so the test leaves the mode in a file: <root>/mode
-ROOT="$WORK/../../.."
+ROOT="${FAKE_ROOT:-$WORK/../../..}"
 MODE=$(cat "$ROOT/mode" 2>/dev/null || echo success)
 printenv | cut -d= -f1 | sort > "$ROOT/envseen"
 echo "$*" > "$ROOT/argsseen"

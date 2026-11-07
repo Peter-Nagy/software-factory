@@ -3,13 +3,14 @@ import { join } from 'node:path';
 import { buildClaudeArgs } from './claude.ts';
 import { parseProjectConfig, type FactoryConfig, type ProjectConfig } from './config.ts';
 import type { Store } from './db.ts';
-import { CHECKS_FILE, CONTRACT_HELP, RUN_DIR, runnerFor } from './gates/contract.ts';
+import { CHECKS_FILE, CONTRACT_HELP, RUN_DIR, runnerFor, type Runner } from './gates/contract.ts';
 import { ORCHESTRATOR_PERMISSIONS, type GitHub, type RepoPermissions } from './github.ts';
 import { takeAnswersForTask } from './questions.ts';
 import { nextStep } from './retry.ts';
 import { promptPath, roleConfig } from './roles.ts';
 import { runInContainer } from './runner/container.ts';
 import { projectImage } from './runner/image.ts';
+import { createSimulator, deleteSimulator, runAgentOnMac, worktreesDir as macWorktreesDir } from './runner/macos.ts';
 import { checkoutPath, git, gitRemote, hasUnpushedCommits, prepareCheckout, redact } from './runner/worktree.ts';
 import type { Secrets } from './secrets.ts';
 import { branchName } from './tasks.ts';
@@ -31,9 +32,26 @@ export interface PipelineContext {
 /** Files the agent writes for the orchestrator. Excluded from git via .git/info/exclude and cleared before each run. */
 export const FACTORY_DIR = RUN_DIR;
 
-/** Until the macOS runner exists, tasks of macOS projects wait parked instead of running where they can't build. */
-export const MACOS_RUNNER_AVAILABLE = false;
-export const NEEDS_MACOS = 'This project runs on the macOS runner (Xcode), which is not set up yet. Requeue it once it is.';
+/** Until the macOS runner is switched on, tasks of macOS projects wait parked instead of running where they can't build. */
+export const NEEDS_MACOS = 'This project runs on the macOS runner (Xcode), which is not switched on (macos.enabled in the factory config). Requeue it once it is.';
+
+/**
+ * Where a project's tasks run, from factory.yaml on main. It has to be known before the checkout, because the
+ * checkout lives where that runner can reach it. Falls back to the project kind.
+ */
+export async function projectRunner(gh: GitHub, project: Project): Promise<Runner> {
+  try {
+    const text = await gh.readFile(project.owner, project.id, 'factory.yaml');
+    if (text) return runnerFor(parseProjectConfig(text));
+  } catch {
+    // unreadable or invalid: the kind decides
+  }
+  return project.kind === 'ios' ? 'macos' : 'linux';
+}
+
+export function worktreeRoot(config: FactoryConfig, runner: Runner): string {
+  return runner === 'macos' ? macWorktreesDir(config.macos) : config.paths.worktrees;
+}
 export interface AgentQuestion {
   question: string;
   options: string[];
@@ -118,7 +136,13 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
   const { token: agentToken } = await ctx.repoAccess(project);
   const { gh, token } = await ctx.repoAccess(project, ORCHESTRATOR_PERMISSIONS);
   const clean = (text: string) => redact(redact(text, token), agentToken);
-  const dir = checkoutPath(config.paths.worktrees, project.id, `${task.issueNumber}`);
+  const runner = await projectRunner(gh, project);
+  if (runner === 'macos' && !config.macos.enabled) {
+    store.transition(task.id, 'parked', { lastFailure: NEEDS_MACOS });
+    await ctx.notify('alert', `Parked ${task.id}: ${NEEDS_MACOS}`);
+    return;
+  }
+  const dir = checkoutPath(worktreeRoot(config, runner), project.id, `${task.issueNumber}`);
   const remoteUrl = ctx.remoteUrl?.(project) ?? `https://github.com/${project.owner}/${project.id}.git`;
   await prepareCheckout({ remoteUrl, dir, branch, token });
   const factoryDir = join(dir, FACTORY_DIR);
@@ -126,23 +150,19 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
   mkdirSync(factoryDir, { recursive: true });
 
   const projectConfig = await loadProjectConfig(dir);
-  if (runnerFor(projectConfig) === 'macos' && !MACOS_RUNNER_AVAILABLE) {
-    store.transition(task.id, 'parked', { lastFailure: NEEDS_MACOS });
-    await ctx.notify('alert', `Parked ${task.id}: ${NEEDS_MACOS}`);
-    return;
-  }
   mkdirSync(config.paths.logs, { recursive: true });
   // Agents run in the project's toolchain image, as the checkout defines it right now (the branch, in a fix).
-  let image: Awaited<ReturnType<typeof projectImage>>;
-  try {
-    image = await projectImage({
-      dir, projectId: project.id, baseImage: config.worker.image,
-      timeoutMs: projectConfig.gates.imageBuildTimeoutMinutes * 60_000,
-      logPath: join(config.paths.logs, `${project.id}-${task.issueNumber}-image-${Date.now()}.log`),
-    });
-  } catch (e) {
-    image = { image: config.worker.image, problem: null };
-    store.event('task.image_error', task.id, { error: (e as Error).message });
+  let image: Awaited<ReturnType<typeof projectImage>> = { image: config.worker.image, problem: null };
+  if (runner === 'linux') {
+    try {
+      image = await projectImage({
+        dir, projectId: project.id, baseImage: config.worker.image,
+        timeoutMs: projectConfig.gates.imageBuildTimeoutMinutes * 60_000,
+        logPath: join(config.paths.logs, `${project.id}-${task.issueNumber}-image-${Date.now()}.log`),
+      });
+    } catch (e) {
+      store.event('task.image_error', task.id, { error: (e as Error).message });
+    }
   }
   const imageNote = image.problem ? `\n\nThe project's toolchain image can't be used, so this run uses the plain worker image. Fix it:\n${image.problem}` : '';
   const contractNote = existsSync(join(dir, CHECKS_FILE)) ? '' : `\n\nThis repo has no ${CHECKS_FILE} yet, and the checks fail without it. Add it in this task.\n${CONTRACT_HELP}`;
@@ -181,9 +201,19 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
   const logPath = join(config.paths.logs, `${project.id}-${task.issueNumber}-${Date.now()}.jsonl`);
   const runId = store.startRun({ taskId: task.id, role: 'implementer', model, logPath, usageBefore: store.latestUsage() });
 
+  // On the macOS runner the agent gets its own Simulator device for the run (sessions stay in the runner's home).
+  const runOnMac = async (): Promise<RunResult> => {
+    const sim = await createSimulator(config.macos, dir, `factory-${project.id}-${task.issueNumber}-${Date.now()}`, logPath);
+    try {
+      const macEnv = sim.udid ? { ...env, FACTORY_SIMULATOR: sim.udid } : env;
+      return await runAgentOnMac(config.macos, dir, args, macEnv, { timeoutMs: role.timeoutMinutes * 60_000, logPath, onSession: (id) => store.setTaskSession(task.id, id) });
+    } finally {
+      if (sim.udid) await deleteSimulator(config.macos, dir, sim.udid, logPath);
+    }
+  };
   let result: RunResult;
   try {
-    result = await runInContainer(
+    result = runner === 'macos' ? await runOnMac() : await runInContainer(
       {
         name: `factory-${project.id}-${task.issueNumber}-${Date.now()}`.toLowerCase().replace(/[^a-z0-9_.-]/g, '-'),
         image: image.image,
