@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { Markdown } from "@/components/markdown"
 import { SimpleSelect } from "@/components/simple-select"
+import { CommentButton, composeMessage, NoteList, OwnerText, useSelectionIn, type SpecNote } from "@/components/spec-comments"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -24,7 +25,11 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
   const [text, setText] = useState("")
   const [sending, setSending] = useState(false)
   const [confirm, setConfirm] = useState(false)
+  const [notes, setNotes] = useState<SpecNote[]>([])
+  const nextNote = useRef(1)
   const chat = useRef<HTMLDivElement>(null)
+  const drafted = useRef<HTMLDivElement>(null)
+  const [selection, clearSelection] = useSelectionIn(drafted)
 
   const p = data?.plan
   const thinking = !!data && (p!.state === "thinking" || (data.busy && p!.state !== "executing"))
@@ -38,12 +43,20 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
     chat.current?.scrollTo({ top: chat.current.scrollHeight, behavior: "smooth" })
   }, [data?.messages.length, thinking])
 
+  const message = composeMessage(notes, text)
+  const addNote = () => {
+    if (!selection) return
+    setNotes((ns) => [...ns, { id: nextNote.current++, quote: selection.text, source: selection.source, comment: "" }])
+    document.getSelection()?.removeAllRanges()
+    clearSelection()
+  }
   const send = async () => {
-    if (!text.trim()) return
+    if (!message) return
     setSending(true)
     try {
-      await api("POST", `plans/${planId}/messages`, { text })
+      await api("POST", `plans/${planId}/messages`, { text: message })
       setText("")
+      setNotes([])
       await reload()
     } catch (e) {
       toast.error((e as Error).message)
@@ -89,12 +102,12 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
         </CardHeader>
         <div ref={chat} className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
           {data.messages.length === 0 && !thinking && (
-            <p className="text-sm text-muted-foreground">Describe what you want. The planner drafts the spec and the issues and asks what it needs.</p>
+            <p className="text-sm text-muted-foreground">Describe what you want. The planner drafts the spec and the issues and asks what it needs. Then select any text in the spec to comment on it.</p>
           )}
           {data.messages.map((m) => (
             <div key={m.id} className={cn("flex", m.role === "owner" ? "justify-end" : m.role === "system" ? "justify-center" : "justify-start")}>
               {m.role === "owner" ? (
-                <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-sm whitespace-pre-wrap text-primary-foreground">{m.text}</div>
+                <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-sm text-primary-foreground"><OwnerText text={m.text} /></div>
               ) : m.role === "planner" ? (
                 <div className="max-w-[92%] rounded-2xl rounded-bl-md bg-muted px-3.5 py-2"><Markdown text={m.text} /></div>
               ) : (
@@ -107,6 +120,12 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
         </div>
         {!done && (
           <div className="border-t p-3">
+            <NoteList
+              notes={notes}
+              disabled={sending}
+              onChange={(id, comment) => setNotes((ns) => ns.map((n) => (n.id === id ? { ...n, comment } : n)))}
+              onRemove={(id) => setNotes((ns) => ns.filter((n) => n.id !== id))}
+            />
             <div className="relative">
               <Textarea
                 value={text}
@@ -115,14 +134,17 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
                   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) void send()
                 }}
                 disabled={thinking || executing}
-                placeholder={thinking ? "Waiting for the planner…" : "Reply to the planner (⌘↵ to send)"}
+                placeholder={thinking ? "Waiting for the planner…" : notes.length ? "Anything else? (optional, ⌘↵ to send)" : "Reply to the planner (⌘↵ to send)"}
                 className="min-h-20 pr-12"
               />
-              <Button size="icon-sm" className="absolute right-2 bottom-2" aria-label="Send" disabled={thinking || executing || sending || !text.trim()} onClick={send}>
+              <Button size="icon-sm" className="absolute right-2 bottom-2" aria-label="Send" disabled={thinking || executing || sending || !message} onClick={send}>
                 <ArrowUp />
               </Button>
             </div>
-            <p className="mt-1.5 text-xs text-muted-foreground">Each message is one {p.model === "opus" ? "Opus" : "Sonnet"} run on your subscription.</p>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {notes.some((n) => !n.comment.trim()) ? "Comments without text aren't sent. " : ""}
+              Each message is one {p.model === "opus" ? "Opus" : "Sonnet"} run on your subscription{notes.length > 1 ? `; your ${notes.length} comments go in one` : ""}.
+            </p>
           </div>
         )}
       </Card>
@@ -144,7 +166,7 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
               )}
             </div>
           </CardHeader>
-          <CardContent className="pt-4">
+          <CardContent ref={drafted} className="pt-4">
             {p.result?.trackingIssue && resultProject && (
               <p className="mb-3 text-sm">
                 <a className="inline-flex items-center gap-1 text-primary hover:underline" href={`${repoUrl(owner, resultProject)}/issues/${p.result.trackingIssue}`} target="_blank" rel="noopener noreferrer">
@@ -157,7 +179,7 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
               <div className="mb-3 rounded-md bg-muted p-2.5 text-xs text-muted-foreground">{files.errors.map((e) => <div key={e}>{e}</div>)}</div>
             )}
             <TabsContent value="spec">
-              {files.product ? <Markdown text={files.product} /> : <p className="text-sm text-muted-foreground">No spec yet.</p>}
+              {files.product ? <div data-comment-source="spec"><Markdown text={files.product} /></div> : <p className="text-sm text-muted-foreground">No spec yet.</p>}
             </TabsContent>
             <TabsContent value="issues">
               {issues.length === 0 ? (
@@ -165,7 +187,7 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
               ) : (
                 <ol className="divide-y">
                   {issues.map((i, n) => (
-                    <li key={i.key}>
+                    <li key={i.key} data-comment-source={`issue:${i.title}`}>
                       <details className="group py-2.5">
                         <summary className="flex cursor-pointer list-none items-start gap-2 text-sm">
                           <span className="w-5 shrink-0 pt-0.5 text-xs text-muted-foreground tabular-nums">{n + 1}</span>
@@ -187,6 +209,8 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
           </CardContent>
         </Tabs>
       </Card>
+
+      {selection && !done && <CommentButton sel={selection} onComment={addNote} />}
 
       <Dialog open={confirm} onOpenChange={setConfirm}>
         <DialogContent>
