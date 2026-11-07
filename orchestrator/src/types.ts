@@ -9,7 +9,8 @@ export type Role =
   | 'reviewer'
   | 'diagnoser'
   | 'triage'
-  | 'improver';
+  | 'improver'
+  | 'studio';
 
 export type Risk = 'low' | 'medium' | 'high';
 export type ProjectKind = 'web-app' | 'static-site' | 'service' | 'cli' | 'ios';

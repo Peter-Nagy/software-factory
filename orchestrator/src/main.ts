@@ -8,6 +8,7 @@ import { applyTimeouts } from './questions.ts';
 import { ghRepoCreator } from './repo-create.ts';
 import { REVIEW_COST_PCT, reviewModelGuess, runReviewStage } from './review.ts';
 import { schedule, scheduleReviews } from './scheduler.ts';
+import { recoverStudios, startQueuedPhases } from './studio.ts';
 
 const ISSUE_SYNC_EVERY_S = 300;
 
@@ -39,6 +40,8 @@ async function main(): Promise<void> {
   }
 
   const recovered = recoverInterrupted(app);
+  recoverStudios(app);
+  const studioWork = new Set<Promise<void>>(); // autopilot phases in flight
 
   if (config.dashboard.enabled) {
     try {
@@ -129,6 +132,15 @@ async function main(): Promise<void> {
 
     const out = schedule(config.governor, base);
 
+    // Studio autopilot shares the budget with builds and reviews: everything in flight counts.
+    if (!stopping) {
+      const inFlight = [...running.keys(), ...studioWork].map(() => ({ estimatedCostPct: 3 }));
+      for (const id of startQueuedPhases(app, inFlight, (work) => {
+        studioWork.add(work);
+        void work.finally(() => studioWork.delete(work));
+      })) console.log(`Studio autopilot: started ${id}`);
+    }
+
     for (const { task, model } of out.picks) {
       const project = projects.find((p) => p.id === task.projectId)!;
       console.log(`Starting ${task.pendingMode} for ${task.id} on ${model}`);
@@ -154,7 +166,7 @@ async function main(): Promise<void> {
     await new Promise((r) => setTimeout(r, config.schedule.tickSeconds * 1000));
   }
 
-  await Promise.allSettled(running.values());
+  await Promise.allSettled([...running.values(), ...studioWork]);
   bot?.stop();
   store.close();
 }

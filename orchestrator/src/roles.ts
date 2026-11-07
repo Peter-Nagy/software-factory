@@ -14,6 +14,8 @@ export const DEFAULT_ROLES: Record<Role, RoleConfig> = {
   diagnoser: { model: 'haiku', maxTurns: 8, timeoutMinutes: 5 },
   triage: { model: 'haiku', maxTurns: 8, timeoutMinutes: 5 },
   improver: { model: 'sonnet', effort: 'medium', maxTurns: 60, timeoutMinutes: 30 },
+  // Studio phases pick their own model (see studio.ts); these are the limits per turn.
+  studio: { model: 'opus', effort: 'high', maxTurns: 80, timeoutMinutes: 40 },
 };
 
 export function roleConfig(config: FactoryConfig, role: Role): RoleConfig {

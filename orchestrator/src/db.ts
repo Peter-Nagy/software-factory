@@ -118,6 +118,35 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE plans ADD COLUMN focus TEXT NOT NULL DEFAULT 'change';`,
   // v5: conversations about one existing issue
   `ALTER TABLE plans ADD COLUMN issue_number INTEGER;`,
+  // v6: the Studio: an idea taken from brief to build plan in phases
+  `CREATE TABLE studios (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     title TEXT NOT NULL,
+     mode TEXT NOT NULL DEFAULT 'guided',
+     plan_id INTEGER,
+     archived INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   );
+   CREATE TABLE studio_phases (
+     studio_id INTEGER NOT NULL REFERENCES studios(id),
+     phase TEXT NOT NULL,
+     state TEXT NOT NULL,
+     model TEXT NOT NULL,
+     session_id TEXT,
+     note TEXT,
+     updated_at INTEGER NOT NULL,
+     PRIMARY KEY (studio_id, phase)
+   );
+   CREATE TABLE studio_messages (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     studio_id INTEGER NOT NULL REFERENCES studios(id),
+     phase TEXT NOT NULL,
+     role TEXT NOT NULL,
+     text TEXT NOT NULL,
+     at INTEGER NOT NULL
+   );
+   ALTER TABLE plans ADD COLUMN studio_id INTEGER;`,
 ];
 
 type Row = Record<string, unknown>;

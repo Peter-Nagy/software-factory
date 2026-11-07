@@ -75,7 +75,7 @@ export function CommentButton({ sel, onComment }: { sel: TextSelection; onCommen
   )
 }
 
-const sourceLabel = (source: string) => (source.startsWith("issue:") ? `Issue: ${source.slice(6)}` : source === "draft" ? "Draft" : "Spec")
+const sourceLabel = (source: string) => (source.startsWith("issue:") ? `Issue: ${source.slice(6)}` : source.startsWith("doc:") ? source.slice(4) : source === "draft" ? "Draft" : "Spec")
 
 /** The attached comments, above the composer. */
 export function NoteList({ notes, onChange, onRemove, disabled }: {
@@ -117,7 +117,7 @@ export function composeMessage(notes: SpecNote[], text: string): string {
   const parts = notes
     .filter((n) => n.comment.trim())
     .map((n) => {
-      const where = n.source.startsWith("issue:") ? `On the issue "${n.source.slice(6)}":` : n.source === "draft" ? "On the draft:" : "On the spec:"
+      const where = n.source.startsWith("issue:") ? `On the issue "${n.source.slice(6)}":` : n.source.startsWith("doc:") ? `On ${n.source.slice(4)}:` : n.source === "draft" ? "On the draft:" : "On the spec:"
       const quote = n.quote.split("\n").map((l) => `> ${l}`).join("\n")
       return `${where}\n${quote}\n\n${n.comment.trim()}`
     })

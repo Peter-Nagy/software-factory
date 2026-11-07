@@ -27,12 +27,29 @@ export function Markdown({ text, className }: { text: string; className?: string
   const blocks: ReactNode[] = []
   let list: ReactNode[] = []
   let code: string[] | null = null
+  let table: string[][] = []
+  const cells = (line: string) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim())
+  const flushTable = () => {
+    if (!table.length) return
+    const [head, ...rows] = table
+    const k = `t-${blocks.length}`
+    blocks.push(
+      <div key={k} className="my-3 overflow-x-auto rounded-xl ring-1 ring-border">
+        <table className="w-full text-left text-[0.8rem]">
+          <thead className="bg-muted/70"><tr>{head!.map((c, i) => <th key={i} className="px-3 py-2 font-semibold whitespace-nowrap">{inline(c, `${k}-h${i}`)}</th>)}</tr></thead>
+          <tbody className="divide-y">{rows.map((r, ri) => <tr key={ri}>{r.map((c, ci) => <td key={ci} className="px-3 py-2 align-top">{inline(c, `${k}-${ri}-${ci}`)}</td>)}</tr>)}</tbody>
+        </table>
+      </div>,
+    )
+    table = []
+  }
   const flushList = () => {
     if (list.length) blocks.push(<ul key={`ul-${blocks.length}`} className="my-1.5 space-y-0.5 pl-5">{list}</ul>)
     list = []
   }
   lines.forEach((line, n) => {
     if (line.startsWith("```")) {
+      flushTable()
       if (code) {
         blocks.push(<pre key={`pre-${n}`} className="my-2 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">{code.join("\n")}</pre>)
         code = null
@@ -43,6 +60,14 @@ export function Markdown({ text, className }: { text: string; className?: string
       return
     }
     if (code) return void code.push(line)
+    // Tables: a header row, a |---| separator, then rows.
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      if (/^\s*\|[\s:|-]+\|\s*$/.test(line) && table.length === 1) return
+      flushList()
+      table.push(cells(line))
+      return
+    }
+    flushTable()
     const li = /^\s*(?:[-*]|\d+\.)\s+(?:\[( |x|X)\]\s+)?(.*)$/.exec(line)
     if (li) {
       const box = li[1] === undefined ? "" : li[1] === " " ? "☐ " : "☑ "
@@ -59,6 +84,7 @@ export function Markdown({ text, className }: { text: string; className?: string
     if (line.trim()) blocks.push(<p key={`p-${n}`} className="my-1.5 leading-relaxed">{inline(line, `p-${n}`)}</p>)
   })
   flushList()
+  flushTable()
   if (code) blocks.push(<pre key="pre-end" className="my-2 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">{(code as string[]).join("\n")}</pre>)
   return <div className={cn("text-sm break-words", className)}>{blocks.map((b, i) => <Fragment key={i}>{b}</Fragment>)}</div>
 }

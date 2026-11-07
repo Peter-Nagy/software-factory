@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { z } from 'zod';
 import { buildClaudeArgs } from './claude.ts';
 import { ORCHESTRATOR_PERMISSIONS, type GitHub } from './github.ts';
@@ -25,6 +25,8 @@ export interface Plan {
   focus: PlanFocus;
   projectId: string | null;
   issueNumber: number | null;
+  /** Set when this plan is the build-plan phase of a Studio: its planner reads the studio's documents. */
+  studioId: number | null;
   state: PlanState;
   model: Model;
   sessionId: string | null;
@@ -80,6 +82,7 @@ const toPlan = (r: Row): Plan => ({
   focus: ((r.focus as string | undefined) ?? 'change') as PlanFocus,
   projectId: (r.project_id as string | null) ?? null,
   issueNumber: r.issue_number == null ? null : Number(r.issue_number),
+  studioId: r.studio_id == null ? null : Number(r.studio_id),
   state: r.state as PlanState,
   model: r.model as Model,
   sessionId: (r.session_id as string | null) ?? null,
@@ -270,10 +273,19 @@ export async function planTurn(ctx: PipelineContext, id: number, text: string): 
       await gitRemote(dir, token, 'clone', '--depth', '1', remote, repoDir);
       mounts[repoDir] = '/work/repo';
     }
+    if (plan.studioId !== null) mounts[join(ctx.config.paths.state, 'studios', String(plan.studioId), 'work', 'docs')] = '/work/studio';
     const first = plan.sessionId === null;
     const prompt = first
       ? [
-          plan.target === 'new'
+          plan.studioId !== null
+            ? [
+                `This is the build plan for "${plan.title}", the last phase of a Studio. The approved brief, research, product,`,
+                'design, architecture and spike results are in /work/studio (read-only): RESEARCH.md, PRODUCT.md, DESIGN.md with',
+                'mockups in design/, ARCHITECTURE.md, SPIKES.md. Build on them; do not re-decide what they settle.',
+                'Make /work/plan/PRODUCT.md the product spec (start from /work/studio/PRODUCT.md). The studio documents go into the',
+                "new repo's docs/ folder, so issues can point builders at them (e.g. 'match docs/design/home.html').",
+              ].join('\n')
+            : plan.target === 'new'
             ? `The owner wants to plan a new project: "${plan.title}".`
             : plan.focus === 'issue'
               ? [
@@ -414,6 +426,23 @@ export function issueLabels(issue: PlanIssue, projectPriority: number): string[]
   return ['factory:ready', `size:${issue.size}`, `risk:${issue.risk}`, `priority:${issue.priority ?? projectPriority}`, ...(issue.area ? [`area:${issue.area}`] : [])];
 }
 
+/** A studio's documents (docs/**) for a new repo; PRODUCT.md comes from the plan itself. */
+function studioDocs(ctx: Pick<PipelineContext, 'config'>, studioId: number): Record<string, string> {
+  const root = join(ctx.config.paths.state, 'studios', String(studioId), 'work');
+  const out: Record<string, string> = {};
+  const walk = (dir: string) => {
+    if (!existsSync(dir)) return;
+    for (const n of readdirSync(dir)) {
+      const p = join(dir, n);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(md|html|json|svg|css)$/i.test(n) && statSync(p).size < 512 * 1024) out[relative(root, p)] = readFileSync(p, 'utf8');
+    }
+  };
+  walk(join(root, 'docs'));
+  delete out['docs/PRODUCT.md'];
+  return out;
+}
+
 export function starterFiles(file: PlanFile, product: string): Record<string, string> {
   const p = file.project!;
   const pitch = product.split('\n').find((l) => l.trim() && !l.startsWith('#'))?.trim() ?? file.title;
@@ -450,7 +479,8 @@ export async function executePlan(ctx: PipelineContext, deps: ExecuteDeps, id: n
       const name = pf.project!.name;
       if (!result.repoCreated) {
         if (ctx.store.projects().some((p) => p.id === name)) throw new Error(`A project called ${name} already exists.`);
-        const repo = await deps.createRepo({ name, description: pf.title, files: starterFiles(pf, files.product) });
+        const extra = plan.studioId !== null ? studioDocs(ctx, plan.studioId) : {};
+        const repo = await deps.createRepo({ name, description: pf.title, files: { ...extra, ...starterFiles(pf, files.product) } });
         result.repoCreated = `${repo.owner}/${repo.name}`;
         save();
       }

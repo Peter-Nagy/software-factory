@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Stands in for a Studio phase agent. Writes the phase's document and status file into the mounted /work.
+# Per-phase behaviour from <work>/../mode-<phase>: "questions" (asks, not ready), "narrow" / "dont" (research verdict),
+# "spikes" (architecture names a spike), "fail" (agent error). Default: done, ready.
+set -euo pipefail
+[ "${1:-}" = "kill" ] && exit 0
+WORK=""; PHASE=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-v" ] && [[ "$a" == *:/work ]]; then WORK="${a%:/work}"; fi
+  if [ "$prev" = "--label" ] && [[ "$a" == factory.phase=* ]]; then PHASE="${a#factory.phase=}"; fi
+  prev="$a"
+done
+MODE=$(cat "$WORK/../mode-$PHASE" 2>/dev/null || echo done)
+echo "$PHASE" >> "$WORK/../turns"
+echo "$*" > "$WORK/../args-$PHASE"
+echo '{"type":"system","subtype":"init","session_id":"sess-'"$PHASE"'"}'
+if [ "$MODE" = "fail" ]; then
+  echo '{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"sess-'"$PHASE"'","result":"gave up","num_turns":80}'
+  exit 0
+fi
+mkdir -p "$WORK/docs/design" "$WORK/status"
+case "$PHASE" in
+  brief) printf '# Brief\n\nA running app for me.\n' > "$WORK/docs/BRIEF.md" ;;
+  research) printf '# Research\n\nStrava, Runna. [source](https://example.com)\n' > "$WORK/docs/RESEARCH.md" ;;
+  product) printf '# Running app\n\nRun with friends.\n\n## Stories\n- [ ] Track a run\n' > "$WORK/docs/PRODUCT.md" ;;
+  design)
+    printf '# Design\n\n- home.html: today\n' > "$WORK/docs/DESIGN.md"
+    printf '<!doctype html><meta name="viewport" content="width=390"><style>body{background:#111;color:#fff}</style><h1>Today</h1><script>parent.document.title="pwned"</script>' > "$WORK/docs/design/home.html"
+    ;;
+  architecture)
+    printf '# Architecture\n\nSwiftUI.\n' > "$WORK/docs/ARCHITECTURE.md"
+    if [ "$MODE" = "spikes" ]; then echo '[{"key":"background-gps","question":"Does GPS keep running in the background?","approach":"tiny app"}]' > "$WORK/docs/spikes.json"; else echo '[]' > "$WORK/docs/spikes.json"; fi
+    ;;
+  spikes) printf '# Spikes\n\nbackground-gps: yes (unverified)\n' > "$WORK/docs/SPIKES.md" ;;
+esac
+case "$MODE" in
+  questions) echo '{"ready": false, "questions": ["Which platform?"], "summary": "need input"}' > "$WORK/status/$PHASE.json" ;;
+  narrow) echo '{"ready": true, "questions": [], "summary": "sharper angle", "verdict": "narrow"}' > "$WORK/status/$PHASE.json" ;;
+  dont) echo '{"ready": true, "questions": [], "summary": "use Runna", "verdict": "dont"}' > "$WORK/status/$PHASE.json" ;;
+  *) echo '{"ready": true, "questions": [], "summary": "done", "verdict": "build"}' > "$WORK/status/$PHASE.json" ;;
+esac
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"sess-'"$PHASE"'","result":"Drafted the '"$PHASE"'.","num_turns":3}'

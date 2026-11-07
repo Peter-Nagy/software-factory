@@ -1,4 +1,4 @@
-import { Activity, Factory, FolderKanban, LayoutGrid, Pause, Play, Sparkles } from "lucide-react"
+import { Activity, Factory, FolderKanban, LayoutGrid, Lightbulb, Pause, Play, Sparkles } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -15,10 +15,13 @@ import { ProjectPage } from "@/pages/project-page"
 import { ProjectsPage } from "@/pages/projects-page"
 import { PlanPage, PlansPage } from "@/pages/plans-page"
 import { IssuePage } from "@/pages/issue-page"
+import { StudioPage } from "@/pages/studio-page"
+import { StudiosPage } from "@/pages/studios-page"
 
 const NAV = [
   { href: "/", label: "Board", icon: LayoutGrid },
   { href: "/projects", label: "Projects", icon: FolderKanban },
+  { href: "/studio", label: "Studio", icon: Lightbulb },
   { href: "/plans", label: "Plans", icon: Sparkles },
   { href: "/activity", label: "Activity", icon: Activity },
 ]
@@ -67,6 +70,8 @@ export default function App() {
   else if (path === "/projects") page = <ProjectsPage />
   else if ((params = match("/projects/:id", path))) page = <ProjectPage key={params.id} id={params.id!} />
   else if ((params = match("/projects/:id/issues/:n", path))) page = <IssuePage key={path} projectId={params.id!} number={Number(params.n)} />
+  else if (path === "/studio") page = <StudiosPage />
+  else if ((params = match("/studio/:id", path))) page = <StudioPage key={params.id} id={Number(params.id)} />
   else if (path === "/plans") page = <PlansPage />
   else if ((params = match("/plans/:id", path))) page = <PlanPage key={params.id} id={Number(params.id)} />
   else if (path === "/activity") page = <ActivityPage />
@@ -111,7 +116,7 @@ export default function App() {
       </main>
       {/* Phones: an app-style tab bar */}
       <nav className="glass fixed inset-x-0 bottom-0 z-30 border-t border-border/60 pb-[env(safe-area-inset-bottom)] sm:hidden">
-        <div className="grid grid-cols-4">
+        <div className="grid grid-cols-5">
           {NAV.map((n) => {
             const Icon = n.icon
             const on = active(n.href)

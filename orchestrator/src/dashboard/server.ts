@@ -23,6 +23,33 @@ import {
   type RepoCreator,
 } from '../plan.ts';
 import { answerQuestion, openQuestions } from '../questions.ts';
+import {
+  approvePhase,
+  archiveStudio,
+  canTalk,
+  createStudio,
+  ensureStudioPlan,
+  getStudio,
+  isBusy,
+  listMockups,
+  listStudios,
+  phaseDef,
+  phaseRow,
+  PHASES,
+  readDoc,
+  readSpikes,
+  readStatus,
+  setPhaseModel,
+  setStudioMode,
+  skipPhase,
+  startMessage,
+  studioMessages,
+  studioPhases,
+  studioTurn,
+  studioWork,
+  syncPlanPhase,
+  type PhaseKey,
+} from '../studio.ts';
 import { TERMINAL_STATES } from '../tasks.ts';
 import type { Model, Project } from '../types.ts';
 
@@ -191,6 +218,21 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
     return { project, n: Number(m[2]) };
   };
 
+  const phaseKey = (v: unknown): PhaseKey => {
+    if (typeof v !== 'string' || !PHASES.some((p) => p.key === v)) throw new HttpError(400, 'Unknown phase');
+    return v as PhaseKey;
+  };
+  /** Studio turns run in the background; the page polls. The build plan phase also shows up as a busy plan. */
+  const studioInBackground = (sid: number, phase: PhaseKey, text: string) => {
+    if (isBusy(sid, phase)) throw new HttpError(409, 'The agent is still working on this phase');
+    const studio = getStudio(ctx, sid);
+    const work = studioTurn(ctx, sid, phase, text).catch((e: Error) => log(`studio ${sid} ${phase}: ${e.message}`));
+    if (phase === 'plan' && studio) {
+      const planId = ensureStudioPlan(ctx, studio).id;
+      background.set(planId, work.finally(() => background.delete(planId)));
+    }
+  };
+
   const runInBackground = (planId: number, work: () => Promise<unknown>) => {
     if (background.has(planId)) throw new HttpError(409, 'The planner is still working on this plan');
     const p = work()
@@ -240,6 +282,20 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
     }
     if (!authed) return send(401, { error: 'Not logged in' });
     if (req.method !== 'GET' && req.headers['x-factory'] !== '1') return send(403, { error: 'Missing X-Factory header' });
+
+    // Studio design mockups: HTML an agent wrote. Served sandboxed (opaque origin: no cookies, no API, no scripts,
+    // no network), and only frameable by this dashboard.
+    const mockup = url.pathname.match(/^\/api\/studios\/(\d+)\/mockup$/);
+    if (mockup && req.method === 'GET') {
+      const name = url.searchParams.get('name') ?? '';
+      const sid = Number(mockup[1]);
+      if (!getStudio(ctx, sid) || !listMockups(ctx, sid).includes(name)) return send(404, { error: 'No such mockup' });
+      return send(200, readFileSync(join(studioWork(ctx, sid), 'docs', 'design', name)), {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-ancestors 'self'",
+        'X-Frame-Options': 'SAMEORIGIN',
+      });
+    }
 
     try {
       const parts = url.pathname.split('/').filter(Boolean).slice(1); // after "api"
@@ -355,6 +411,75 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
         if (first) runInBackground(plan.id, () => planTurn(ctx, plan.id, first.slice(0, 20_000)));
         return getPlan(ctx, plan.id);
       }
+      case 'GET studios':
+        return listStudios(ctx).map((s) => ({ ...s, phases: studioPhases(ctx, s.id).map((p) => ({ phase: p.phase, state: p.state })) }));
+      case 'POST studios': {
+        const studio = createStudio(ctx, { title: str(body.title, 'title', 100), mode: body.mode === 'autopilot' ? 'autopilot' : 'guided' });
+        const first = typeof body.message === 'string' && body.message.trim() ? body.message.trim().slice(0, 20_000) : null;
+        if (first) studioInBackground(studio.id, 'brief', first);
+        return studio;
+      }
+      case 'GET studios/:id': {
+        const sid = Number(id);
+        const studio = getStudio(ctx, sid);
+        if (!studio) throw new HttpError(404, `No studio ${id}`);
+        syncPlanPhase(ctx, sid);
+        return {
+          studio,
+          phases: studioPhases(ctx, sid).map((p) => {
+            const def = phaseDef(p.phase);
+            return { ...p, title: def.title, doc: def.doc, costPct: def.costPct, optional: !!def.optional, busy: isBusy(sid, p.phase), status: readStatus(ctx, sid, p.phase) };
+          }),
+          messages: studioMessages(ctx, sid),
+          docs: Object.fromEntries(PHASES.filter((d) => d.key !== 'plan').map((d) => [d.key, readDoc(ctx, sid, d.doc)])),
+          mockups: listMockups(ctx, sid),
+          spikes: readSpikes(ctx, sid),
+        };
+      }
+      case 'POST studios/:id/messages': {
+        const sid = Number(id);
+        const phase = phaseKey(body.phase);
+        if (!getStudio(ctx, sid)) throw new HttpError(404, `No studio ${id}`);
+        const state = phaseRow(ctx, sid, phase).state;
+        if (!canTalk(state)) throw new HttpError(400, `${phaseDef(phase).title} is ${state}`);
+        studioInBackground(sid, phase, str(body.text, 'text'));
+        return;
+      }
+      case 'POST studios/:id/start': {
+        const sid = Number(id);
+        const phase = phaseKey(body.phase);
+        const row = phaseRow(ctx, sid, phase);
+        if (!canTalk(row.state)) throw new HttpError(400, `${phaseDef(phase).title} is ${row.state}`);
+        studioInBackground(sid, phase, startMessage(phase, row.state, false));
+        return;
+      }
+      case 'POST studios/:id/approve':
+        try {
+          approvePhase(ctx, Number(id), phaseKey(body.phase));
+        } catch (e) {
+          throw new HttpError(400, (e as Error).message);
+        }
+        return;
+      case 'POST studios/:id/skip':
+        try {
+          skipPhase(ctx, Number(id), phaseKey(body.phase));
+        } catch (e) {
+          throw new HttpError(400, (e as Error).message);
+        }
+        return;
+      case 'POST studios/:id/mode':
+        setStudioMode(ctx, Number(id), body.mode === 'autopilot' ? 'autopilot' : 'guided');
+        return;
+      case 'POST studios/:id/model':
+        setPhaseModel(ctx, Number(id), phaseKey(body.phase), body.model === 'sonnet' ? 'sonnet' : 'opus');
+        return;
+      case 'POST studios/:id/archive':
+        try {
+          archiveStudio(ctx, Number(id));
+        } catch (e) {
+          throw new HttpError(400, (e as Error).message);
+        }
+        return;
       case 'POST projects/:id/tasks': {
         const project = store.projects().find((x) => x.id === id);
         if (!project) throw new HttpError(404, `No project ${id}`);

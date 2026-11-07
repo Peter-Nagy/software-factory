@@ -1,0 +1,230 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { request } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseFactoryConfig } from '../src/config.ts';
+import { dashboardToken, startDashboard, type DashboardContext } from '../src/dashboard/server.ts';
+import { Store } from '../src/db.ts';
+import type { GitHub } from '../src/github.ts';
+import { executePlan, getPlan } from '../src/plan.ts';
+import { Secrets } from '../src/secrets.ts';
+import {
+  approvePhase,
+  createStudio,
+  ensureStudioPlan,
+  getStudio,
+  phaseRow,
+  recoverStudios,
+  setStudioMode,
+  startQueuedPhases,
+  studioMessages,
+  studioPhases,
+  studioTurn,
+  studioWork,
+  type PhaseKey,
+} from '../src/studio.ts';
+
+const fixture = (n: string) => fileURLToPath(new URL(`./fixtures/${n}`, import.meta.url));
+const studioDocker = fixture('fake-docker-studio.sh');
+const planDocker = fixture('fake-docker-plan.sh');
+chmodSync(studioDocker, 0o755);
+chmodSync(planDocker, 0o755);
+
+function setup() {
+  const root = mkdtempSync(join(tmpdir(), 'factory-studio-'));
+  const store = new Store(':memory:');
+  const config = parseFactoryConfig(`github: {owner: me}\npaths: {state: ${root}/state, logs: ${root}/logs, workerConfig: ${root}/cfg}\ndashboard: {port: 0}`);
+  const repos: { name: string; files: Record<string, string> }[] = [];
+  const gh = {
+    ensureLabels: async () => undefined,
+    createIssue: async () => ({ number: 1, html_url: 'x' }),
+  } as unknown as GitHub;
+  const now = Math.floor(Date.now() / 1000);
+  // fresh, low usage so the governor lets autopilot run (Opus included)
+  store.recordUsage({ fiveHourPct: 10, fiveHourResetsAt: now + 3600, sevenDayPct: 5, sevenDayResetsAt: now + 6 * 86400, source: 'stream', takenAt: now });
+  const ctx: DashboardContext = {
+    config, store, secrets: new Secrets({ reader: async () => 'secret' }),
+    repoAccess: async () => ({ gh, token: 't' }), repoClient: async () => ({ gh, token: 't' }),
+    now: () => Math.floor(Date.now() / 1000), notify: async () => undefined,
+  };
+  process.env.FACTORY_DOCKER_BIN = studioDocker;
+  const mode = (id: number, phase: PhaseKey, m: string) => writeFileSync(join(studioWork(ctx, id), '..', `mode-${phase}`), m);
+  const states = (id: number) => Object.fromEntries(studioPhases(ctx, id).map((p) => [p.phase, p.state]));
+  return { root, store, ctx, repos, mode, states, createRepo: async (p: { name: string; files: Record<string, string> }) => (repos.push(p), { owner: 'me', name: p.name }) };
+}
+
+test('studio, guided: phases open in order, approval unlocks the next, spikes skip when there is nothing to test', async () => {
+  const s = setup();
+  const st = createStudio(s.ctx, { title: 'Running app' });
+  assert.deepEqual(Object.values(s.states(st.id)), ['ready', 'locked', 'locked', 'locked', 'locked', 'locked', 'locked']);
+  await assert.rejects(studioTurn(s.ctx, st.id, 'research', 'go'), /locked/);
+
+  await studioTurn(s.ctx, st.id, 'brief', 'I want to create a running app');
+  assert.equal(s.states(st.id).brief, 'drafting');
+  assert.deepEqual(studioMessages(s.ctx, st.id, 'brief').map((m) => m.role), ['owner', 'agent']);
+  const args = readFileSync(join(studioWork(s.ctx, st.id), '..', 'args-brief'), 'utf8');
+  assert.match(args, /--model sonnet[\s\S]*prompts\/studio\.md/);
+  assert.match(args, /You own the Brief phase[\s\S]*status\/brief\.json/);
+
+  for (const phase of ['brief', 'research', 'product', 'design'] as PhaseKey[]) {
+    if (phase !== 'brief') await studioTurn(s.ctx, st.id, phase, 'go');
+    approvePhase(s.ctx, st.id, phase);
+  }
+  assert.equal(phaseRow(s.ctx, st.id, 'design').model, 'opus');
+  await studioTurn(s.ctx, st.id, 'architecture', 'go');
+  approvePhase(s.ctx, st.id, 'architecture');
+  assert.equal(s.states(st.id).spikes, 'skipped');
+  assert.equal(s.states(st.id).plan, 'ready');
+  assert.throws(() => approvePhase(s.ctx, st.id, 'plan'), /executing it/);
+
+  // Reworking the product makes the later approved phases stale.
+  await studioTurn(s.ctx, st.id, 'product', 'add social features');
+  approvePhase(s.ctx, st.id, 'product');
+  const after = s.states(st.id);
+  assert.equal(after.design, 'stale');
+  assert.equal(after.architecture, 'stale');
+  assert.equal(after.product, 'approved');
+});
+
+test('studio, guided: risky unknowns open the spikes phase; a failed turn keeps the phase usable', async () => {
+  const s = setup();
+  const st = createStudio(s.ctx, { title: 'Running app' });
+  for (const phase of ['brief', 'research', 'product', 'design'] as PhaseKey[]) {
+    await studioTurn(s.ctx, st.id, phase, 'go');
+    approvePhase(s.ctx, st.id, phase);
+  }
+  s.mode(st.id, 'architecture', 'spikes');
+  await studioTurn(s.ctx, st.id, 'architecture', 'go');
+  approvePhase(s.ctx, st.id, 'architecture');
+  assert.equal(s.states(st.id).spikes, 'ready');
+  assert.equal(s.states(st.id).plan, 'locked');
+
+  s.mode(st.id, 'spikes', 'fail');
+  await studioTurn(s.ctx, st.id, 'spikes', 'go');
+  assert.equal(s.states(st.id).spikes, 'ready');
+  assert.match(studioMessages(s.ctx, st.id, 'spikes').at(-1)!.text, /The agent stopped: gave up/);
+});
+
+test('studio, autopilot: done phases approve themselves under the governor and stop at the go/no-go', async () => {
+  const s = setup();
+  const st = createStudio(s.ctx, { title: 'Running app', mode: 'autopilot' });
+  s.mode(st.id, 'research', 'narrow');
+  setStudioMode(s.ctx, st.id, 'autopilot');
+  assert.equal(s.states(st.id).brief, 'queued');
+
+  const run = async () => {
+    const work: Promise<void>[] = [];
+    const started = startQueuedPhases(s.ctx, [], (w) => work.push(w));
+    await Promise.all(work);
+    return started;
+  };
+  assert.deepEqual(await run(), [`${st.id}:brief`]);
+  assert.equal(s.states(st.id).brief, 'approved');
+  assert.equal(s.states(st.id).research, 'queued');
+
+  // Paused: nothing starts, the phase says why.
+  s.store.setSetting('pausedUntil', String(Math.floor(Date.now() / 1000) + 3600));
+  assert.deepEqual(await run(), []);
+  assert.match(phaseRow(s.ctx, st.id, 'research').note!, /Waiting: factory paused/);
+  s.store.setSetting('pausedUntil', null);
+
+  assert.deepEqual(await run(), [`${st.id}:research`]);
+  assert.equal(s.states(st.id).research, 'drafting'); // verdict "narrow": stops for the owner
+  assert.match(studioMessages(s.ctx, st.id, 'research').at(-1)!.text, /go\/no-go[\s\S]*narrow/);
+  assert.deepEqual(await run(), []);
+
+  // The owner approves anyway; autopilot carries on until a phase has questions.
+  s.mode(st.id, 'product', 'questions');
+  approvePhase(s.ctx, st.id, 'research');
+  assert.deepEqual(await run(), [`${st.id}:product`]);
+  assert.equal(s.states(st.id).product, 'drafting');
+  assert.match(studioMessages(s.ctx, st.id, 'product').at(-1)!.text, /needs your answers/);
+});
+
+test('studio: a restart puts interrupted phases back', () => {
+  const s = setup();
+  const st = createStudio(s.ctx, { title: 'x' });
+  s.store.db.prepare(`UPDATE studio_phases SET state = 'thinking' WHERE studio_id = ? AND phase = 'brief'`).run(st.id);
+  recoverStudios(s.ctx);
+  assert.equal(s.states(st.id).brief, 'ready');
+  assert.match(phaseRow(s.ctx, st.id, 'brief').note!, /restart/);
+});
+
+test('studio build plan: the planner reads the studio documents and Execute puts them in the new repo', async () => {
+  const s = setup();
+  const st = createStudio(s.ctx, { title: 'Running app' });
+  for (const phase of ['brief', 'research', 'product', 'design', 'architecture'] as PhaseKey[]) {
+    await studioTurn(s.ctx, st.id, phase, 'go');
+    approvePhase(s.ctx, st.id, phase);
+  }
+  process.env.FACTORY_DOCKER_BIN = planDocker;
+  await studioTurn(s.ctx, st.id, 'plan', 'Plan it');
+  const plan = getPlan(s.ctx, getStudio(s.ctx, st.id)!.planId!)!;
+  assert.equal(plan.studioId, st.id);
+  assert.equal(s.states(st.id).plan, 'drafting');
+  const args = readFileSync(join(s.root, 'state/plans', String(plan.id), 'argsseen'), 'utf8');
+  assert.match(args, /studios\/\d+\/work\/docs:\/work\/studio:ro/);
+  assert.match(args, /last phase of a Studio/);
+  assert.equal(ensureStudioPlan(s.ctx, getStudio(s.ctx, st.id)!).id, plan.id); // one plan per studio
+
+  await executePlan(s.ctx, { createRepo: s.createRepo, repoClient: async () => ({ gh: (await s.ctx.repoClient({} as never, {})).gh }) }, plan.id);
+  const files = s.repos[0]!.files;
+  assert.match(files['docs/RESEARCH.md']!, /Strava/);
+  assert.match(files['docs/design/home.html']!, /Today/);
+  assert.match(files['docs/PRODUCT.md']!, /Habit tracker/); // the plan's own spec wins over the studio draft
+  assert.equal(files['docs/status/brief.json'], undefined);
+});
+
+// ---------- over HTTP ----------
+
+function call(port: number, method: string, path: string, opts: { cookie?: string; body?: unknown } = {}) {
+  return new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; text: string }>((resolve, reject) => {
+    const data = opts.body === undefined ? undefined : JSON.stringify(opts.body);
+    const req = request({ host: '127.0.0.1', port, method, path, headers: { Host: 'localhost', ...(opts.cookie ? { Cookie: opts.cookie } : {}), ...(method === 'POST' ? { 'X-Factory': '1', 'Content-Type': 'application/json' } : {}) } }, (res) => {
+      let text = '';
+      res.on('data', (c) => (text += c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, text }));
+    });
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+test('studio over HTTP: create with a first message, read, approve; mockups are served sandboxed', async () => {
+  const s = setup();
+  const server = await startDashboard(s.ctx, { createRepo: s.createRepo, distDir: join(s.root, 'nodist'), log: () => undefined });
+  const port = (server.address() as AddressInfo).port;
+  const cookie = `factory_session=${encodeURIComponent(dashboardToken(s.ctx))}`;
+  try {
+    const created = JSON.parse((await call(port, 'POST', '/api/studios', { cookie, body: { title: 'Running app', message: 'I want to create a running app' } })).text);
+    for (let i = 0; i < 50 && studioMessages(s.ctx, created.id).length < 2; i++) await new Promise((r) => setTimeout(r, 50));
+    const detail = JSON.parse((await call(port, 'GET', `/api/studios/${created.id}`, { cookie })).text);
+    assert.equal(detail.phases[0].state, 'drafting');
+    assert.equal(detail.phases[0].status.ready, true);
+    assert.match(detail.docs.brief, /A running app/);
+    assert.equal((await call(port, 'POST', `/api/studios/${created.id}/approve`, { cookie, body: { phase: 'research' } })).status, 400);
+    assert.equal((await call(port, 'POST', `/api/studios/${created.id}/approve`, { cookie, body: { phase: 'brief' } })).status, 200);
+    assert.equal((await call(port, 'POST', `/api/studios/${created.id}/messages`, { cookie, body: { phase: 'design', text: 'x' } })).status, 400); // locked
+    assert.equal((await call(port, 'POST', `/api/studios/${created.id}/approve`, { cookie, body: { phase: 'nope' } })).status, 400);
+
+    // A mockup with a script: served with a sandbox CSP and no access to anything else.
+    for (const phase of ['research', 'product', 'design'] as PhaseKey[]) {
+      await studioTurn(s.ctx, created.id, phase, 'go');
+      approvePhase(s.ctx, created.id, phase);
+    }
+    const m = await call(port, 'GET', `/api/studios/${created.id}/mockup?name=home.html`, { cookie });
+    assert.equal(m.status, 200);
+    assert.match(String(m.headers['content-security-policy']), /^sandbox; default-src 'none'.*frame-ancestors 'self'/);
+    assert.equal(m.headers['x-frame-options'], 'SAMEORIGIN');
+    assert.equal((await call(port, 'GET', `/api/studios/${created.id}/mockup?name=../../../factory.db`, { cookie })).status, 404);
+    assert.equal((await call(port, 'GET', `/api/studios/${created.id}/mockup?name=home.html`)).status, 401);
+    assert.ok(existsSync(join(studioWork(s.ctx, created.id), 'docs', 'design', 'home.html')));
+  } finally {
+    server.close();
+  }
+});
+

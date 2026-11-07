@@ -60,3 +60,22 @@ export async function api<T = unknown>(method: "GET" | "POST", path: string, bod
 }
 
 export const enc = encodeURIComponent
+
+// ---------- Studio ----------
+export type PhaseKey = "brief" | "research" | "product" | "design" | "architecture" | "spikes" | "plan"
+export type PhaseState = "locked" | "ready" | "queued" | "thinking" | "drafting" | "approved" | "stale" | "skipped"
+export interface Studio { id: number; title: string; mode: "guided" | "autopilot"; planId: number | null; archived: boolean; createdAt: number; updatedAt: number }
+export interface StudioSummary extends Studio { phases: { phase: PhaseKey; state: PhaseState }[] }
+export interface StudioPhase {
+  phase: PhaseKey; state: PhaseState; model: Model; note: string | null; updatedAt: number
+  title: string; doc: string; costPct: number; optional: boolean; busy: boolean
+  status: { ready: boolean; questions: string[]; summary: string; verdict?: "build" | "narrow" | "dont" } | null
+}
+export interface StudioDetail {
+  studio: Studio
+  phases: StudioPhase[]
+  messages: { id: number; phase: PhaseKey; role: "owner" | "agent" | "system"; text: string; at: number }[]
+  docs: Partial<Record<PhaseKey, string | null>>
+  mockups: string[]
+  spikes: { key: string; question: string; approach: string }[] | null
+}
