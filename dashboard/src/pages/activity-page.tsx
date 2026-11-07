@@ -1,4 +1,5 @@
 import { Bot, Hammer, ScanSearch, Sparkles } from "lucide-react"
+import { UsagePanel } from "@/components/usage-panel"
 import { PageHeader, SectionTitle } from "@/components/visual"
 import { useFactory } from "@/lib/factory"
 import { when } from "@/lib/format"
@@ -30,39 +31,12 @@ const taskHref = (id: string) => {
 
 export function ActivityPage() {
   const { state } = useFactory()
-  const total = state.spend.reduce((s, r) => s + Number(r.usd), 0)
-  const runs = state.spend.reduce((s, r) => s + Number(r.runs), 0)
-  const byModel = Object.entries(
-    state.spend.reduce<Record<string, number>>((m, r) => ({ ...m, [r.model]: (m[r.model] ?? 0) + Number(r.usd) }), {}),
-  ).sort((a, b) => b[1] - a[1])
-  const MODEL_TONE: Record<string, string> = { opus: "bg-violet-500", sonnet: "bg-sky-500", haiku: "bg-emerald-500" }
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Activity" eyebrow="What the agents did, and what it would have cost on the API" />
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)]">
-        <section className="rounded-3xl border bg-card p-6 shadow-elevation">
-          <p className="text-sm text-muted-foreground">Last 7 days</p>
-          <p className="mt-1 text-5xl font-semibold tracking-tighter tabular-nums">${total.toFixed(2)}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{runs} runs · API-price estimate. On the subscription, the usage rings are what counts.</p>
-          {byModel.length > 0 && (
-            <>
-              <div className="mt-6 flex h-2.5 overflow-hidden rounded-full bg-muted">
-                {byModel.map(([m, usd]) => <div key={m} className={cn("h-full", MODEL_TONE[m] ?? "bg-foreground/40")} style={{ width: `${total ? (usd / total) * 100 : 0}%` }} />)}
-              </div>
-              <ul className="mt-4 space-y-2.5 text-sm">
-                {state.spend.map((r) => (
-                  <li key={`${r.role}-${r.model}`} className="flex items-center gap-2.5">
-                    <span className={cn("size-2.5 rounded-full", MODEL_TONE[r.model] ?? "bg-foreground/40")} />
-                    <span className="capitalize">{r.role}</span>
-                    <span className="text-muted-foreground">{r.model} · {r.runs}×</span>
-                    <span className="ml-auto font-medium tabular-nums">${Number(r.usd).toFixed(2)}</span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </section>
+      <PageHeader title="Activity" eyebrow="What the agents did, and how much of your limits it used" />
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
+        <UsagePanel />
 
         <section className="overflow-hidden rounded-3xl border bg-card shadow-elevation">
           <div className="px-5 pt-5"><SectionTitle>Recent runs</SectionTitle></div>

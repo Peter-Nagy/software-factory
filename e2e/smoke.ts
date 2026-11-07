@@ -46,6 +46,10 @@ add(2, 'Sign in with magic links', [['building', { attempt: 1, branch: 'claude/2
 add(3, 'Import habits from CSV', [['building', { attempt: 3, branch: 'claude/3' }], ['parked', { lastFailure: 'Retries exhausted: quoted newlines.' }]]);
 add(4, 'Streaks with grace days', []);
 store.recordUsage({ fiveHourPct: 30, fiveHourResetsAt: now + 7200, sevenDayPct: 20, sevenDayResetsAt: now + 4 * 86400, source: 'stream', takenAt: now - 60 });
+for (const [i, [subject, role, usd]] of ([['habits#1', 'implementer', 0.6], ['habits#1', 'reviewer', 0.2], ['studio:1:brief', 'studio', 0.3]] as const).entries()) {
+  store.db.prepare('INSERT INTO runs (task_id, subject, role, model, started_at, finished_at, ok, cost_usd, num_turns) VALUES (?, ?, ?, ?, ?, ?, 1, ?, 5)')
+    .run(subject.includes('#') ? subject : null, subject, role, 'sonnet', now - 3600 * (i + 1), now - 3600 * (i + 1) + 300, usd);
+}
 const gh = {
   issue: async (_o: string, _r: string, n: number) => ({ number: n, title: `Issue ${n}`, body: 'Do the thing.\n\n## Acceptance criteria\n- [ ] It works', state: 'open', html_url: 'https://github.com/x', labels: [] }),
   readFile: async () => '# Habits\n\nBuild good habits.',
@@ -138,9 +142,10 @@ await check('plans: list and plan view with the drafted issues', async (page) =>
   await page.getByRole('tab', { name: /Issues/ }).click();
   await see(page, 'Weekly stats');
 });
-await check('activity page', async (page) => {
+await check('activity page with the usage panel', async (page) => {
   await page.goto(`${base}/activity`);
-  await page.waitForSelector('main');
+  await see(page, 'at API prices');
+  await see(page, 'By project');
 });
 await check('studio: the interview form sends the answers as one message', async (page) => {
   await capture(page, '**/api/studios/*/messages');

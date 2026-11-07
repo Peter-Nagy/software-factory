@@ -161,6 +161,9 @@ const MIGRATIONS: string[] = [
      edited INTEGER NOT NULL DEFAULT 0,
      at INTEGER NOT NULL
    );`,
+  // v8: what a run was for, beyond its task: "plan:3", "studio:1:brief", "studio:1:brief:standin", "intake"
+  `ALTER TABLE runs ADD COLUMN subject TEXT;
+   UPDATE runs SET subject = task_id WHERE task_id IS NOT NULL;`,
 ];
 
 type Row = Record<string, unknown>;
@@ -314,10 +317,10 @@ export class Store {
   }
 
   // --- runs & usage ---
-  startRun(r: { taskId: string | null; role: Role; model: Model; logPath: string; usageBefore: UsageSnapshot | null }): number {
+  startRun(r: { taskId: string | null; role: Role; model: Model; logPath: string; usageBefore: UsageSnapshot | null; subject?: string }): number {
     const res = this.db
-      .prepare('INSERT INTO runs (task_id, role, model, started_at, log_path, usage_before) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(r.taskId, r.role, r.model, nowS(), r.logPath, JSON.stringify(r.usageBefore));
+      .prepare('INSERT INTO runs (task_id, role, model, started_at, log_path, usage_before, subject) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(r.taskId, r.role, r.model, nowS(), r.logPath, JSON.stringify(r.usageBefore), r.subject ?? r.taskId);
     return Number(res.lastInsertRowid);
   }
 

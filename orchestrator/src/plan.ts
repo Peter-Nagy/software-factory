@@ -317,7 +317,7 @@ export async function planTurn(ctx: PipelineContext, id: number, text: string): 
     });
     mkdirSync(config.paths.logs, { recursive: true });
     const logPath = join(config.paths.logs, `plan-${id}-${Date.now()}.jsonl`);
-    const runId = store.startRun({ taskId: null, role: 'planner', model: plan.model, logPath, usageBefore: store.latestUsage() });
+    const runId = store.startRun({ taskId: null, role: 'planner', model: plan.model, logPath, usageBefore: store.latestUsage(), subject: `plan:${plan.id}` });
     const result = await runInContainer(
       {
         name: `factory-plan-${id}-${Date.now()}`,

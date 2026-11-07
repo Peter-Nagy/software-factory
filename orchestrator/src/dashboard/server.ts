@@ -24,6 +24,7 @@ import {
   type RepoCreator,
 } from '../plan.ts';
 import { answerQuestion, openQuestions } from '../questions.ts';
+import { calibrate, costReport, loadCostRuns, measuredPhaseCosts, projectNamer } from '../costs.ts';
 import {
   approvePhase,
   archiveStudio,
@@ -434,6 +435,12 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
         if (first) runInBackground(plan.id, () => planTurn(ctx, plan.id, first.slice(0, 20_000)));
         return getPlan(ctx, plan.id);
       }
+      case 'GET costs/:id': {
+        // id = days to look back
+        const days = Math.min(90, Math.max(1, Number(id) || 7));
+        const runs = loadCostRuns(store, 0);
+        return costReport(runs, calibrate(runs), ctx.now() - days * 86400, projectNamer(store), ctx.config.schedule.timezone);
+      }
       case 'GET studios':
         return listStudios(ctx).map((s) => ({ ...s, phases: studioPhases(ctx, s.id).map((p) => ({ phase: p.phase, state: p.state })) }));
       case 'POST studios': {
@@ -447,11 +454,13 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
         const studio = getStudio(ctx, sid);
         if (!studio) throw new HttpError(404, `No studio ${id}`);
         syncPlanPhase(ctx, sid);
+        const measured_ = measuredPhaseCosts(store, ctx.now());
         return {
           studio,
           phases: studioPhases(ctx, sid).map((p) => {
             const def = phaseDef(p.phase);
-            return { ...p, title: def.title, doc: def.doc, costPct: def.costPct, optional: !!def.optional, busy: isBusy(sid, p.phase), status: readStatus(ctx, sid, p.phase) };
+            const measured = measured_.get(`${p.phase}|${p.model}`);
+            return { ...p, title: def.title, doc: def.doc, costPct: measured === undefined ? def.costPct : Math.max(0.5, Math.round(measured * 2) / 2), costMeasured: measured !== undefined, optional: !!def.optional, busy: isBusy(sid, p.phase), status: readStatus(ctx, sid, p.phase) };
           }),
           messages: studioMessages(ctx, sid),
           docs: Object.fromEntries(PHASES.filter((d) => d.key !== 'plan').map((d) => [d.key, readDoc(ctx, sid, d.doc)])),

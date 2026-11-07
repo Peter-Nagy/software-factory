@@ -68,7 +68,7 @@ export interface Studio { id: number; title: string; mode: "guided" | "autopilot
 export interface StudioSummary extends Studio { phases: { phase: PhaseKey; state: PhaseState }[] }
 export interface StudioPhase {
   phase: PhaseKey; state: PhaseState; model: Model; note: string | null; updatedAt: number
-  title: string; doc: string; costPct: number; optional: boolean; busy: boolean
+  title: string; doc: string; costPct: number; costMeasured?: boolean; optional: boolean; busy: boolean
   autoAnswer: "running" | "review" | null
   status: { ready: boolean; questions: StudioQuestion[]; coverage: { topic: string; done: boolean }[]; summary: string; verdict?: "build" | "narrow" | "dont" } | null
 }
@@ -87,3 +87,12 @@ export interface StudioDetail {
   spikes: { key: string; question: string; approach: string }[] | null
 }
 export interface StudioAnswer { id: number; phase: PhaseKey; round: number; question: StudioQuestion; answer: string; reason: string; edited: boolean }
+
+export interface CostLine { key: string; runs: number; usd: number; fiveHourPct: number | null; sevenDayPct: number | null }
+export interface CostReport {
+  since: number
+  calibration: { fiveHourPctPerUsd: number | null; sevenDayPctPerUsd: number | null; samples: number }
+  total: CostLine; byProject: CostLine[]; byRole: CostLine[]; byModel: CostLine[]
+  studioPhases: (CostLine & { phase: string; model: string; perMessageUsd: number; perMessageFiveHourPct: number | null })[]
+  days: { date: string; usd: number }[]
+}

@@ -369,7 +369,7 @@ async function runStudioAgent(ctx: PipelineContext, studio: Studio, phase: Phase
   const logPath = join(config.paths.logs, `studio-${id}-${phase}${standin ? '-standin' : ''}-${Date.now()}.jsonl`);
   const sessionsDir = join(studioDir(ctx, id), 'sessions', standin ? `${phase}-standin` : phase);
   mkdirSync(sessionsDir, { recursive: true });
-  const runId = store.startRun({ taskId: null, role: 'studio', model: o.model, logPath, usageBefore: store.latestUsage() });
+  const runId = store.startRun({ taskId: null, role: 'studio', model: o.model, logPath, usageBefore: store.latestUsage(), subject: `studio:${id}:${phase}${standin ? ':standin' : ''}` });
   const result = await runInContainer(
     {
       name: `factory-studio-${id}-${phase}${standin ? '-standin' : ''}-${Date.now()}`,

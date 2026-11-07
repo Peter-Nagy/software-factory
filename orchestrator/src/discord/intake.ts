@@ -35,7 +35,7 @@ export function containerIntake(ctx: PipelineContext): IntakeRunner {
       mkdirSync(config.paths.logs, { recursive: true });
       const logPath = join(config.paths.logs, `intake-${Date.now()}.jsonl`);
       const env = { [config.worker.claudeTokenEnv]: await ctx.secrets.get(config.worker.claudeTokenEnv) };
-      const runId = store.startRun({ taskId: null, role: 'intake', model: role.model, logPath, usageBefore: store.latestUsage() });
+      const runId = store.startRun({ taskId: null, role: 'intake', model: role.model, logPath, usageBefore: store.latestUsage(), subject: 'intake' });
       const result = await runInContainer(
         {
           name: `factory-intake-${Date.now()}`,

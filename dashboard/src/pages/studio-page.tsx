@@ -217,7 +217,7 @@ export function StudioPage({ id }: { id: number }) {
           <p className="font-semibold tracking-tight">{phase.title} <span className="font-normal text-muted-foreground">· {STATE_TEXT[phase.busy && phase.state !== "thinking" ? "thinking" : phase.state]}</span></p>
           <p className="text-sm text-muted-foreground">{phase.note ?? PHASE_HINT[phase.phase]}</p>
         </div>
-        <span className="hidden text-xs text-muted-foreground sm:inline">~{phase.costPct}% of a 5-hour window per message</span>
+        <span className="hidden text-xs text-muted-foreground sm:inline">~{phase.costPct}% of a 5-hour window per message{phase.costMeasured ? " (measured)" : ""}</span>
         <div className="flex flex-wrap gap-2">
           {phase.optional && !["approved", "skipped", "thinking"].includes(phase.state) && <Button variant="ghost" size="sm" onClick={() => post("skip", { phase: phase.phase }, `${phase.title} skipped`)}><SkipForward /> Skip</Button>}
           {startable && !thinking && phase.phase !== "plan" && (
