@@ -7,3 +7,4 @@ spikes/results/*
 .env.*
 *.pem
 .DS_Store
+.factory-run/

@@ -1,5 +1,5 @@
 import { Check, ExternalLink, Rocket } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { toast } from "sonner"
 import { Markdown } from "@/components/markdown"
 import { ChatPanel, useDocComments } from "@/components/chat-panel"
@@ -17,8 +17,8 @@ import { usePoll } from "@/lib/use-poll"
  * Execute when it's ready. Used on the Plans page and on a project page for iterating its goals.
  */
 export function PlanView({ planId, owner, onChanged }: { planId: number; owner: string; onChanged?: () => void }) {
-  const [fast, setFast] = useState(true)
-  const { data, reload } = usePoll(() => api<PlanDetail>("GET", `plans/${planId}`), fast ? 2500 : 10000, [planId])
+  const { data, reload } = usePoll(() => api<PlanDetail>("GET", `plans/${planId}`),
+    (d) => (!d || d.busy || ["thinking", "executing"].includes(d.plan.state) ? 2500 : 10000), [planId])
   const [confirm, setConfirm] = useState(false)
   const drafted = useRef<HTMLDivElement>(null)
   const comments = useDocComments(drafted, data?.plan.state !== "executed")
@@ -31,7 +31,6 @@ export function PlanView({ planId, owner, onChanged }: { planId: number; owner: 
   const isIssue = p?.focus === "issue"
   const ready = isIssue ? !!files?.issue : !!files?.plan && files.errors.length === 0 && !!files.product
 
-  useEffect(() => setFast(thinking || executing || !data), [thinking, executing, data])
 
   const send = async (text: string) => {
     await api("POST", `plans/${planId}/messages`, { text })

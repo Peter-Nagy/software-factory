@@ -66,7 +66,7 @@ export interface DashboardContext extends PipelineContext {
 /** The commit this process runs, read once at startup. */
 const VERSION = (() => {
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fileURLToPath(new URL('.', import.meta.url)), encoding: 'utf8' }).trim();
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fileURLToPath(new URL('.', import.meta.url)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch {
     return 'unknown';
   }

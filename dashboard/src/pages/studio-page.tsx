@@ -1,5 +1,5 @@
 import { Archive, Check, Clock3, FlaskConical, Loader2, Lock, Maximize2, Minus, Play, RefreshCw, Rocket, SkipForward, Sparkles } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { toast } from "sonner"
 import { ChatPanel, useDocComments } from "@/components/chat-panel"
 import { AnswerReview, Coverage, Interview, StandinRunning } from "@/components/interview"
@@ -141,15 +141,13 @@ function PhaseDoc({ studioId, phase, detail, docRef }: { studioId: number; phase
 
 export function StudioPage({ id }: { id: number }) {
   const { state } = useFactory()
-  const [fast, setFast] = useState(true)
-  const { data, error, reload } = usePoll(() => api<StudioDetail>("GET", `studios/${id}`), fast ? 3000 : 10000, [id])
+  const working = (d: StudioDetail | null) => !d || d.phases.some((p) => p.busy || p.state === "thinking" || p.state === "queued")
+  const { data, error, reload } = usePoll(() => api<StudioDetail>("GET", `studios/${id}`), (d) => (working(d) ? 3000 : 10000), [id])
   const initial = new URLSearchParams(window.location.search).get("phase") as PhaseKey | null
   const [picked, setPicked] = useState<PhaseKey | null>(initial)
   const docRef = useRef<HTMLDivElement>(null)
   const comments = useDocComments(docRef)
 
-  const working = !!data?.phases.some((p) => p.busy || p.state === "thinking" || p.state === "queued")
-  useEffect(() => setFast(working || !data), [working, data])
 
   if (error && !data) return <p className="text-sm text-muted-foreground">{error}</p>
   if (!data) return <div className="space-y-4"><Skeleton className="h-24 w-full rounded-3xl" /><Skeleton className="h-[32rem] w-full rounded-3xl" /></div>

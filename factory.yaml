@@ -1,0 +1,21 @@
+# The factory's own repo, built by the factory. Changes to the safety layers merge only after the owner signs off.
+kind: service
+gates:
+  e2e: true # the dashboard smoke test (e2e/smoke.ts)
+ownerApproval:
+  - CLAUDE.md
+  - .factory/**                         # this repo's own checks
+  - ops/**                              # setup, sudoers, sandbox profile, launchd, update script
+  - worker/**                           # the worker image
+  - orchestrator/src/governor.ts        # usage caps and hard stops
+  - orchestrator/src/config.ts          # defaults, including the governor's
+  - orchestrator/src/gates/**           # what the gates check
+  - orchestrator/src/review.ts          # gates, review, sign-off and merge
+  - orchestrator/src/secrets.ts         # secret scoping
+  - orchestrator/src/github.ts          # token permissions
+  - orchestrator/src/runner/**          # containers, the macOS sandbox, worktrees
+  - orchestrator/src/claude.ts          # how agents are started
+  - orchestrator/src/roles.ts           # models, budgets and timeouts per role
+  - orchestrator/src/db.ts              # schema migrations of the live database
+  - orchestrator/src/dashboard/server.ts # dashboard auth and the sandboxed mockups
+  - orchestrator/src/main.ts            # the main loop and shutdown

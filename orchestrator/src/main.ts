@@ -43,9 +43,11 @@ async function main(): Promise<void> {
   recoverStudios(app);
   const studioWork = new Set<Promise<void>>(); // autopilot phases in flight
 
+  let dashboard: Awaited<ReturnType<typeof startDashboard>> | null = null;
   if (config.dashboard.enabled) {
     try {
       const server = await startDashboard(app, { createRepo: ghRepoCreator(config.github.owner, config.github.managedTopic) });
+      dashboard = server;
       process.once('exit', () => server.close());
       console.log(`Dashboard on http://127.0.0.1:${config.dashboard.port} (login link: factory dashboard-url)`);
     } catch (e) {
@@ -167,6 +169,9 @@ async function main(): Promise<void> {
     await new Promise((r) => setTimeout(r, config.schedule.tickSeconds * 1000));
   }
 
+  // Stop taking dashboard requests before the database closes under them.
+  dashboard?.close();
+  dashboard?.closeAllConnections();
   await Promise.allSettled([...running.values(), ...studioWork]);
   bot?.stop();
   store.close();

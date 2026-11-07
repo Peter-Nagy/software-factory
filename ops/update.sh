@@ -56,14 +56,14 @@ install_and_build() {
     npm test >/tmp/factory-update-test.log 2>&1 || { tail -40 /tmp/factory-update-test.log; return 1; }
     (cd dashboard && npx tsc -b)
   fi
-  (cd dashboard && npm run -s build >/dev/null)
+  (cd dashboard && npm run -s build >/tmp/factory-update-build.log 2>&1) || { tail -30 /tmp/factory-update-build.log; return 1; }
 }
 
 health() { curl -fsS --max-time 3 "http://127.0.0.1:$PORT/api/health" 2>/dev/null || true; }
 # Waits until the running process reports commit $1 with a heartbeat after $2.
 wait_healthy() {
   local want="$1" since="$2"
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 ${FACTORY_HEALTH_TRIES:-60}); do
     local h; h="$(health)"
     if [ -n "$h" ] && node -e '
       const h = JSON.parse(process.argv[1]);

@@ -21,7 +21,7 @@ const isAnswered = (q: StudioQuestion, a: Answer | undefined) =>
   !!a && (a.yourCall || a.picked.length > 0 || !!a.other?.trim() || (freeText(q) && !!a.note.trim()))
 
 /** The answers as one chat message; the agent sees each question quoted with the answer under it. */
-export function composeAnswers(questions: StudioQuestion[], answers: Record<number, Answer>): string {
+function composeAnswers(questions: StudioQuestion[], answers: Record<number, Answer>): string {
   const blocks = questions.map((q, i) => {
     const a = answers[i] ?? EMPTY
     const parts = [...a.picked, a.other?.trim() ?? ""].filter(Boolean)

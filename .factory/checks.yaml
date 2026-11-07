@@ -1,0 +1,10 @@
+# The factory's own checks (see orchestrator/src/gates/contract.ts for the contract).
+setup: npm ci --no-audit --no-fund && (cd dashboard && npm ci --no-audit --no-fund)
+build: npm run typecheck && (cd dashboard && npm run build)
+lint: cd dashboard && npx oxlint --deny-warnings
+test: >-
+  node --disable-warning=ExperimentalWarning --test
+  --test-reporter=spec --test-reporter-destination=stdout
+  --test-reporter=junit --test-reporter-destination="$FACTORY_REPORT_DIR/unit.xml"
+  'orchestrator/test/**/*.test.ts'
+e2e: node --disable-warning=ExperimentalWarning e2e/smoke.ts
