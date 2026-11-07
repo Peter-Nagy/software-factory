@@ -13,12 +13,14 @@ turn ideas and GitHub issues into tested, reviewed and deployed apps while you'r
 | --- | --- |
 | S0 spikes | All pass on the Mac mini ([results](spikes/results/summary.md)) |
 | M1 core: config, SQLite state, governor, scheduler, retry ladder, container runner, issue to PR | Done; ran end to end on factory-sandbox |
-| M2 gates, independent review, auto-merge | Done; first real merge: factory-sandbox PR #2. Gates follow the stack-independent check contract below |
-| M3 governor live: usage probe, own-use detection | Usage readings live from every run; own-use detection next |
-| M4 Discord: intake, questions with buttons, approvals, alerts, daily digest, slash commands | Built and tested; needs your bot token to go live |
-| Dashboard: board, project pages with goals, plan mode (M5 planning), activity | Built |
-| M7 macOS runner | Built and tested with fakes; needs `sudo ops/setup-macos-runner.sh` |
-| M6 deploy · M8 maintenance · M10 self-improvement · M11 hardening | Planned |
+| M2 gates, independent review, auto-merge | Done; real merges on factory-sandbox. Gates follow the stack-independent check contract below. Protected changes and destructive migrations merge only after the owner signs off |
+| M3 governor live: usage probe, own-use detection | Usage readings live from every run; usage per project, agent and studio phase measured (Activity page); own-use detection next |
+| M4 Discord: intake, questions with buttons, approvals, alerts, daily digest, slash commands | Built and tested; needs your bot token to go live. Lighter alternative: ntfy push (built, off until configured) |
+| M5 planning: plan mode, issue pages, Studio (idea to build plan: interviews, stand-in answers, launch kit) | Built |
+| Dashboard | Built; Playwright smoke test over sample data (`e2e/smoke.ts`) |
+| M7 macOS runner | Built, set up and isolated; Simulator tests hang on Xcode 26.6 + macOS 27 (likely needs Xcode 27). `ops/macos-runner/selftest.sh` checks it |
+| M11 hardening | `factory update` (checks, restart, health check, rollback), `/api/health` heartbeat, daily backups, watchdog (install with `setup.sh --launchd`), runbook |
+| M6 deploy · M8 maintenance · M10 self-improvement | Planned. The factory builds itself once `software-factory` is registered as a project |
 
 ## Check contract
 
