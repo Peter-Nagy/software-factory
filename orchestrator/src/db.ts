@@ -164,6 +164,10 @@ const MIGRATIONS: string[] = [
   // v8: what a run was for, beyond its task: "plan:3", "studio:1:brief", "studio:1:brief:standin", "intake"
   `ALTER TABLE runs ADD COLUMN subject TEXT;
    UPDATE runs SET subject = task_id WHERE task_id IS NOT NULL;`,
+  // v9: the Launch kit phase, after the build plan
+  `INSERT INTO studio_phases (studio_id, phase, state, model, updated_at)
+     SELECT id, 'launch', 'locked', 'opus', updated_at FROM studios
+     WHERE id NOT IN (SELECT studio_id FROM studio_phases WHERE phase = 'launch');`,
 ];
 
 type Row = Record<string, unknown>;

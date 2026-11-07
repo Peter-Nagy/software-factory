@@ -62,7 +62,7 @@ export async function api<T = unknown>(method: "GET" | "POST", path: string, bod
 export const enc = encodeURIComponent
 
 // ---------- Studio ----------
-export type PhaseKey = "brief" | "research" | "product" | "design" | "architecture" | "spikes" | "plan"
+export type PhaseKey = "brief" | "research" | "product" | "design" | "architecture" | "spikes" | "plan" | "launch"
 export type PhaseState = "locked" | "ready" | "queued" | "thinking" | "drafting" | "approved" | "stale" | "skipped"
 export interface Studio { id: number; title: string; mode: "guided" | "autopilot"; planId: number | null; archived: boolean; createdAt: number; updatedAt: number }
 export interface StudioSummary extends Studio { phases: { phase: PhaseKey; state: PhaseState }[] }

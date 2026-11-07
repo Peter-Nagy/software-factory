@@ -41,6 +41,11 @@ case "$PHASE" in
     if [ "$MODE" = "spikes" ]; then echo '[{"key":"background-gps","question":"Does GPS keep running in the background?","approach":"tiny app"}]' > "$WORK/docs/spikes.json"; else echo '[]' > "$WORK/docs/spikes.json"; fi
     ;;
   spikes) printf '# Spikes\n\nbackground-gps: yes (unverified)\n' > "$WORK/docs/SPIKES.md" ;;
+  launch)
+    mkdir -p "$WORK/docs/launch"
+    printf '# Launch kit\n\nStore listing: Stride.\n' > "$WORK/docs/LAUNCH.md"
+    printf '<!doctype html><h1>Run together</h1>' > "$WORK/docs/launch/landing.html"
+    ;;
 esac
 # "rounds": asks until it has seen two rounds of answers, then is done; "endless": always asks.
 if [ "$MODE" = "rounds" ]; then

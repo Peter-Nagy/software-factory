@@ -24,6 +24,7 @@ const PHASE_HINT: Record<PhaseKey, string> = {
   architecture: "Stack, data, integrations, privacy and platform rules, cost, risky unknowns.",
   spikes: "Tiny throwaway prototypes that answer the risky questions before planning.",
   plan: "Milestones and issues with acceptance criteria. Execute creates the repo and files them.",
+  launch: "Store listing, privacy policy, landing page, launch posts and a checklist, prepared while the factory builds.",
 }
 
 export function PhaseIcon({ state, small, busy }: { state: PhaseState; small?: boolean; busy?: boolean }) {
@@ -73,10 +74,13 @@ function Stepper({ phases, current, onPick }: { phases: StudioPhase[]; current: 
 }
 
 /** A mockup is agent-written HTML: shown in a sandboxed frame (no scripts, no same-origin access), served with a sandbox CSP. */
-function MockupFrame({ src, scale }: { src: string; scale: number }) {
+/** An agent's HTML page, sandboxed: a phone frame for mockups, a browser window for launch pages. */
+function MockupFrame({ src, scale, web }: { src: string; scale: number; web?: boolean }) {
+  const [w, h] = web ? [1280, 800] : [390, 844]
   return (
-    <div className="overflow-hidden rounded-[2rem] bg-black p-2 shadow-elevation ring-1 ring-border" style={{ width: 390 * scale + 16, height: 844 * scale + 16 }}>
-      <iframe title="Mockup" src={src} sandbox="" loading="lazy" referrerPolicy="no-referrer" className="origin-top-left rounded-[1.6rem] bg-white" style={{ width: 390, height: 844, transform: `scale(${scale})` }} />
+    <div className={cn("overflow-hidden bg-black shadow-elevation ring-1 ring-border", web ? "rounded-xl pt-5" : "rounded-[2rem] p-2")}
+      style={{ width: w * scale + (web ? 0 : 16), height: h * scale + (web ? 20 : 16) }}>
+      <iframe title="Mockup" src={src} sandbox="" loading="lazy" referrerPolicy="no-referrer" className={cn("origin-top-left bg-white", !web && "rounded-[1.6rem]")} style={{ width: w, height: h, transform: `scale(${scale})` }} />
     </div>
   )
 }
@@ -98,6 +102,9 @@ function Verdict({ verdict }: { verdict: "build" | "narrow" | "dont" }) {
 function PhaseDoc({ studioId, phase, detail, docRef }: { studioId: number; phase: StudioPhase; detail: StudioDetail; docRef: React.RefObject<HTMLDivElement | null> }) {
   const [open, setOpen] = useState<string | null>(null)
   const doc = detail.docs[phase.phase]
+  const launch = phase.phase === "launch"
+  const pages = phase.phase === "design" ? detail.mockups.filter((m) => !m.includes("/")) : launch ? detail.mockups.filter((m) => m.startsWith("launch/")) : []
+  const pageName = (m: string) => m.replace(/^launch\//, "").replace(/\.html$/, "")
   const file = phase.doc.split("/").pop()!
   return (
     <Card>
@@ -109,14 +116,14 @@ function PhaseDoc({ studioId, phase, detail, docRef }: { studioId: number; phase
         {phase.phase === "research" && phase.status?.verdict && <Verdict verdict={phase.status.verdict} />}
         {phase.status && <Coverage topics={phase.status.coverage} />}
         {doc ? <div data-comment-source={`doc:${file}`}><Markdown text={doc} /></div> : <p className="text-sm text-muted-foreground">{phase.busy || phase.state === "thinking" ? "The agent is writing it…" : "Nothing written yet."}</p>}
-        {phase.phase === "design" && detail.mockups.length > 0 && (
+        {pages.length > 0 && (
           <div className="mt-6">
-            <p className="mb-3 text-sm font-semibold">Mockups</p>
+            <p className="mb-3 text-sm font-semibold">{launch ? "Pages" : "Mockups"}</p>
             <div className="flex flex-wrap gap-4">
-              {detail.mockups.map((m) => (
+              {pages.map((m) => (
                 <button key={m} type="button" onClick={() => setOpen(m)} className="group text-left">
-                  <MockupFrame src={`/api/studios/${studioId}/mockup?name=${encodeURIComponent(m)}`} scale={0.42} />
-                  <span className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">{m.replace(/\.html$/, "")} <Maximize2 className="size-3" /></span>
+                  <MockupFrame src={`/api/studios/${studioId}/mockup?name=${encodeURIComponent(m)}`} scale={launch ? 0.3 : 0.42} web={launch} />
+                  <span className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground">{pageName(m)} <Maximize2 className="size-3" /></span>
                 </button>
               ))}
             </div>
@@ -131,8 +138,8 @@ function PhaseDoc({ studioId, phase, detail, docRef }: { studioId: number; phase
       </CardContent>
       <Dialog open={open !== null} onOpenChange={(o) => !o && setOpen(null)}>
         <DialogContent className="w-auto max-w-none sm:max-w-none">
-          <DialogHeader><DialogTitle>{open?.replace(/\.html$/, "")}</DialogTitle></DialogHeader>
-          {open && <div className="flex justify-center"><MockupFrame src={`/api/studios/${studioId}/mockup?name=${encodeURIComponent(open)}`} scale={0.85} /></div>}
+          <DialogHeader><DialogTitle>{open ? pageName(open) : ""}</DialogTitle></DialogHeader>
+          {open && <div className="flex justify-center"><MockupFrame src={`/api/studios/${studioId}/mockup?name=${encodeURIComponent(open)}`} scale={open.startsWith("launch/") ? 0.7 : 0.85} web={open.startsWith("launch/")} /></div>}
         </DialogContent>
       </Dialog>
     </Card>

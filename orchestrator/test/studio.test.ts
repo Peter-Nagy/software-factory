@@ -24,6 +24,9 @@ import {
   ensureStudioPlan,
   getStudio,
   phaseRow,
+  listMockups,
+  mockupPath,
+  syncPlanPhase,
   PhaseStatusSchema,
   readStatus,
   recoverStudios,
@@ -68,7 +71,7 @@ function setup() {
 test('studio, guided: phases open in order, approval unlocks the next, spikes skip when there is nothing to test', async () => {
   const s = setup();
   const st = createStudio(s.ctx, { title: 'Running app' });
-  assert.deepEqual(Object.values(s.states(st.id)), ['ready', 'locked', 'locked', 'locked', 'locked', 'locked', 'locked']);
+  assert.deepEqual(Object.values(s.states(st.id)), ['ready', 'locked', 'locked', 'locked', 'locked', 'locked', 'locked', 'locked']);
   await assert.rejects(studioTurn(s.ctx, st.id, 'research', 'go'), /locked/);
 
   await studioTurn(s.ctx, st.id, 'brief', 'I want to create a running app');
@@ -185,6 +188,18 @@ test('studio build plan: the planner reads the studio documents and Execute puts
   assert.match(files['docs/design/home.html']!, /Today/);
   assert.match(files['docs/PRODUCT.md']!, /Habit tracker/); // the plan's own spec wins over the studio draft
   assert.equal(files['docs/status/brief.json'], undefined);
+
+  // The executed plan opens the launch kit, prepared while the factory builds; its pages are listed with the mockups.
+  syncPlanPhase(s.ctx, st.id);
+  assert.equal(s.states(st.id).plan, 'approved');
+  assert.equal(s.states(st.id).launch, 'ready');
+  process.env.FACTORY_DOCKER_BIN = studioDocker;
+  await studioTurn(s.ctx, st.id, 'launch', 'Prepare the launch');
+  assert.equal(s.states(st.id).launch, 'drafting');
+  assert.deepEqual(listMockups(s.ctx, st.id), ['home.html', 'launch/landing.html']);
+  assert.match(readFileSync(mockupPath(s.ctx, st.id, 'launch/landing.html'), 'utf8'), /Run together/);
+  approvePhase(s.ctx, st.id, 'launch');
+  assert.equal(s.states(st.id).launch, 'approved');
 });
 
 // ---------- over HTTP ----------

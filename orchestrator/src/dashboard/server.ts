@@ -36,6 +36,7 @@ import {
   getStudio,
   isBusy,
   listMockups,
+  mockupPath,
   listStudios,
   phaseDef,
   phaseRow,
@@ -53,7 +54,6 @@ import {
   studioMessages,
   studioPhases,
   studioTurn,
-  studioWork,
   syncPlanPhase,
   type PhaseKey,
 } from '../studio.ts';
@@ -314,7 +314,7 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
       const name = url.searchParams.get('name') ?? '';
       const sid = Number(mockup[1]);
       if (!getStudio(ctx, sid) || !listMockups(ctx, sid).includes(name)) return send(404, { error: 'No such mockup' });
-      return send(200, readFileSync(join(studioWork(ctx, sid), 'docs', 'design', name)), {
+      return send(200, readFileSync(mockupPath(ctx, sid, name)), {
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-ancestors 'self'",
         'X-Frame-Options': 'SAMEORIGIN',

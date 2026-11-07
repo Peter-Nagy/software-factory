@@ -82,7 +82,7 @@ export function StudiosPage() {
                   <Link href={`/studio/${s.id}`} className="flex items-center gap-4 px-5 py-4 text-sm transition-colors hover:bg-muted/50">
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium">{s.title}</p>
-                      <p className="text-xs text-muted-foreground">{s.mode === "autopilot" ? "Autopilot" : "Guided"} · {current ? `at ${current.phase === "plan" ? "build plan" : current.phase}` : "planned"} · {ago(s.updatedAt)}</p>
+                      <p className="text-xs text-muted-foreground">{s.mode === "autopilot" ? "Autopilot" : "Guided"} · {current ? `at ${current.phase === "plan" ? "build plan" : current.phase === "launch" ? "launch kit" : current.phase}` : "planned"} · {ago(s.updatedAt)}</p>
                     </div>
                     <div className="hidden items-center gap-1 sm:flex">
                       {s.phases.map((p) => <PhaseIcon key={p.phase} state={p.state} small />)}

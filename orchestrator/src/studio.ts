@@ -18,7 +18,7 @@ import { snapshotAfterRun } from './usage.ts';
  * The last phase is a regular plan (plans table, Execute button), so a studio ends exactly like plan mode does.
  */
 
-export type PhaseKey = 'brief' | 'research' | 'product' | 'design' | 'architecture' | 'spikes' | 'plan';
+export type PhaseKey = 'brief' | 'research' | 'product' | 'design' | 'architecture' | 'spikes' | 'plan' | 'launch';
 export interface PhaseDef {
   key: PhaseKey;
   title: string;
@@ -38,6 +38,8 @@ export const PHASES: PhaseDef[] = [
   { key: 'architecture', title: 'Architecture', model: 'opus', doc: 'docs/ARCHITECTURE.md', costPct: 5 },
   { key: 'spikes', title: 'Spikes', model: 'sonnet', doc: 'docs/SPIKES.md', costPct: 6, optional: true },
   { key: 'plan', title: 'Build plan', model: 'opus', doc: 'plan/plan.json', costPct: 4 },
+  // Opens once the build plan is executed, so it's prepared while the factory builds.
+  { key: 'launch', title: 'Launch kit', model: 'opus', doc: 'docs/LAUNCH.md', costPct: 6, optional: true },
 ];
 export const phaseDef = (k: string): PhaseDef => {
   const d = PHASES.find((p) => p.key === k);
@@ -173,7 +175,7 @@ export function createStudio(ctx: Ctx, p: { title: string; mode?: StudioMode }):
   for (const d of PHASES) {
     ctx.store.db.prepare('INSERT INTO studio_phases (studio_id, phase, state, model, updated_at) VALUES (?, ?, ?, ?, ?)').run(id, d.key, d.key === 'brief' ? 'ready' : 'locked', d.model, now);
   }
-  for (const sub of ['docs/design', 'status', 'spikes']) mkdirSync(join(studioWork(ctx, id), sub), { recursive: true });
+  for (const sub of ['docs/design', 'docs/launch', 'status', 'spikes']) mkdirSync(join(studioWork(ctx, id), sub), { recursive: true });
   mkdirSync(join(studioDir(ctx, id), 'sessions'), { recursive: true });
   return getStudio(ctx, id)!;
 }
@@ -222,11 +224,16 @@ export function readSpikes(ctx: Ctx, id: number): z.infer<typeof SpikesSchema> |
 }
 
 /** Design mockups: self-contained HTML files in docs/design. */
+/** HTML pages agents wrote: design mockups (`home.html`) and launch pages (`launch/landing.html`). */
 export function listMockups(ctx: Ctx, id: number): string[] {
-  const dir = join(studioWork(ctx, id), 'docs', 'design');
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((f) => /^[a-z0-9][a-z0-9._-]*\.html$/i.test(f)).sort();
+  const html = (sub: string) => {
+    const dir = join(studioWork(ctx, id), 'docs', sub);
+    return existsSync(dir) ? readdirSync(dir).filter((f) => /^[a-z0-9][a-z0-9._-]*\.html$/i.test(f)).sort() : [];
+  };
+  return [...html('design'), ...html('launch').map((f) => `launch/${f}`)];
 }
+/** Where a listed mockup lives on disk (names come from listMockups only). */
+export const mockupPath = (ctx: Ctx, id: number, name: string) => join(studioWork(ctx, id), 'docs', name.startsWith('launch/') ? '' : 'design', name);
 
 // ---------- transitions (pure decisions over the stored rows) ----------
 
@@ -466,6 +473,11 @@ export function syncPlanPhase(ctx: Ctx, id: number): void {
   if (!plan || row.state === 'locked') return;
   const state: PhaseState = plan.state === 'executed' ? 'approved' : plan.state === 'thinking' || plan.state === 'executing' ? 'thinking' : row.state === 'stale' ? 'stale' : 'drafting';
   if (state !== row.state) setPhase(ctx, id, 'plan', { state });
+  // The repo exists: the launch kit can be prepared while the factory builds.
+  if (state === 'approved' && phaseRow(ctx, id, 'launch').state === 'locked') {
+    setPhase(ctx, id, 'launch', { state: 'ready', note: null });
+    queueNextIfIdle(ctx, id);
+  }
 }
 
 // ---------- autopilot, driven by the main loop ----------

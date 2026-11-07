@@ -79,6 +79,14 @@ store.db.prepare("UPDATE studio_phases SET state = 'drafting', auto_answer = 're
 store.db.prepare("INSERT INTO studio_answers (studio_id, phase, batch, round, question, answer, reason, at) VALUES (?, 'brief', 1, 1, ?, 'iPhone only', 'recommended', ?)")
   .run(review.id, JSON.stringify(question('Platform', 'Which platforms?', ['iPhone only', 'iPhone + web'])), now);
 
+const launched = createStudio(ctx as never, { title: 'Launched app' });
+const lw = studioWork(ctx as never, launched.id);
+mkdirSync(join(lw, 'docs', 'launch'), { recursive: true });
+writeFileSync(join(lw, 'docs/LAUNCH.md'), '# Launch kit\n\n## Store listing\nStride: run together.\n');
+writeFileSync(join(lw, 'docs/launch/landing.html'), '<!doctype html><h1>Run together</h1>');
+store.db.prepare("UPDATE studio_phases SET state = 'approved' WHERE studio_id = ? AND phase != 'launch'").run(launched.id);
+store.db.prepare("UPDATE studio_phases SET state = 'drafting' WHERE studio_id = ? AND phase = 'launch'").run(launched.id);
+
 const server = await startDashboard(ctx as never, { createRepo: async () => { throw new Error('not in tests'); }, distDir: join(root, 'dashboard', 'dist') });
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 const token = dashboardToken(ctx as never);
@@ -178,6 +186,12 @@ await check('studio: reviewing the stand-in\'s answers sends only the changes', 
   await page.waitForTimeout(500);
   const edits = (posted as { edits?: { answer: string }[] } | null)?.edits ?? [];
   if (edits.length !== 1 || edits[0]!.answer !== 'iPhone + web') throw new Error(`unexpected review: ${JSON.stringify(posted)}`);
+});
+await check('studio: the launch kit shows its document and pages', async (page) => {
+  await page.goto(`${base}/studio/${launched.id}?phase=launch`);
+  await see(page, 'Stride: run together.');
+  await see(page, 'Pages');
+  await see(page, 'landing');
 });
 await check('studio list and the new-idea form', async (page) => {
   await page.goto(`${base}/studio`);
