@@ -370,7 +370,7 @@ test('macOS runner: agent and project checks run through the runner with a Simul
     const [run, wt, , envNames, sim] = agent.split('|');
     assert.equal(run, join(s.root, 'bin', 'run'));
     assert.equal(wt, join(s.root, 'worktrees', 'app', '30'));
-    assert.deepEqual(envNames!.split(','), ['APP_SECRET', 'CLAUDE_CODE_OAUTH_TOKEN', 'FACTORY_SIMULATOR', 'GH_TOKEN']);
+    assert.deepEqual(envNames!.split(','), ['APP_SECRET', 'CLAUDE_CODE_OAUTH_TOKEN', 'FACTORY_SIMULATOR', 'GH_TOKEN', 'XCODE_XCCONFIG_FILE']);
     assert.equal(sim, '0A1B2C3D-0000-4000-8000-000000000001');
     assert.doesNotMatch(readFileSync(join(s.root, 'argsseen'), 'utf8'), /value-of/); // secrets never on a command line
     assert.match(readFileSync(join(s.root, 'argsseen'), 'utf8'), /<issue number="30">[\s\S]*Lint runs ESLint/); // the agent gets the issue itself

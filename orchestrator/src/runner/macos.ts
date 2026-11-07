@@ -1,5 +1,5 @@
 import { spawnSync, type ChildProcess } from 'node:child_process';
-import { cpSync, existsSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FactoryConfig } from '../config.ts';
 import type { RunResult } from '../types.ts';
@@ -16,6 +16,18 @@ export const worktreesDir = (cfg: MacosConfig) => join(cfg.root, 'worktrees');
 const runScript = (cfg: MacosConfig) => join(cfg.root, 'bin', 'run');
 const sudoBin = () => process.env.FACTORY_SUDO_BIN ?? '/usr/bin/sudo';
 
+/**
+ * Xcode's own sandboxes (package manifests and plugins, build-script phases) can't start inside the runner's
+ * sandbox: macOS doesn't nest them. They're switched off for the runner user only; everything Xcode runs stays
+ * inside the runner's sandbox, which blocks the owner's home and limits writes to the task's checkout.
+ */
+export const xcconfigPath = (cfg: MacosConfig) => join(cfg.root, 'config', 'xcode.xcconfig');
+const XCCONFIG = '// Written by the factory orchestrator. The runner sandbox replaces Xcode\'s script sandbox.\nENABLE_USER_SCRIPT_SANDBOXING = NO\n';
+const XCODE_DEFAULTS = [
+  'defaults write com.apple.dt.Xcode IDEPackageSupportDisableManifestSandbox -bool YES',
+  'defaults write com.apple.dt.Xcode IDEPackageSupportDisablePluginExecutionSandbox -bool YES',
+].join(' && ');
+
 
 function macProcess(cfg: MacosConfig, worktree: string, command: string[], env: Record<string, string>): ProcessSpec {
   for (const k of Object.keys(env)) if (!/^[A-Z][A-Z0-9_]*$/.test(k)) throw new Error(`Invalid env var name: ${k}`);
@@ -23,7 +35,7 @@ function macProcess(cfg: MacosConfig, worktree: string, command: string[], env: 
     cmd: sudoBin(),
     args: ['-n', '-u', cfg.user, runScript(cfg), worktree, '--', ...command],
     env: {},
-    stdin: JSON.stringify(env),
+    stdin: JSON.stringify({ XCODE_XCCONFIG_FILE: xcconfigPath(cfg), ...env }),
     cwd: '/', // the runner user can't enter the owner's home, where the orchestrator itself runs
     // sudo relays the signal to the runner, which stops the command's whole process group.
     kill: (child: ChildProcess) => {
@@ -52,11 +64,13 @@ export function syncWorkerConfig(cfg: MacosConfig, workerConfigDir: string): voi
   if (!existsSync(join(cfg.root, 'config'))) throw new Error(`${cfg.root}/config is missing: run ops/setup-macos-runner.sh`);
   rmSync(dest, { recursive: true, force: true });
   cpSync(workerConfigDir, dest, { recursive: true });
+  writeFileSync(xcconfigPath(cfg), XCCONFIG);
 }
 
 /** Pick the newest available iOS runtime and its newest iPhone, create a device, print its UDID. */
 const CREATE_SIMULATOR = [
   'set -euo pipefail',
+  XCODE_DEFAULTS, // every run that may build gets a Simulator first, so the settings are always in place
   "rt=$(xcrun simctl list -j runtimes | jq -r '[.runtimes[] | select(.platform == \"iOS\" and .isAvailable)] | last | .identifier // empty')",
   '[ -n "$rt" ] || { echo "no iOS Simulator runtime installed (xcodebuild -downloadPlatform iOS)" >&2; exit 1; }',
   "dt=$(xcrun simctl list -j runtimes | jq -r --arg rt \"$rt\" '.runtimes[] | select(.identifier == $rt) | [.supportedDeviceTypes[] | select(.productFamily == \"iPhone\")] | last | .identifier // empty')",
