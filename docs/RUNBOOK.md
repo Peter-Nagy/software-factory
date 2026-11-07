@@ -79,6 +79,22 @@ version running. Otherwise it restarts and waits for `/api/health` to report the
 if that doesn't happen within 3 minutes it rolls back to the previous commit and restarts that. Log:
 `~/factory/logs/update.log`. Health: `curl http://127.0.0.1:4777/api/health` (local only).
 
+## Backups
+
+Every day at 03:00 (`backup.hourLocal`) the orchestrator writes `~/factory/backups/<UTC time>/`: `factory.db` (a
+consistent copy, integrity-checked), `state.tar.gz` (plans, studios, agent sessions) and `factory.config.yaml`. It keeps
+the newest 14 (`backup.keep`). For a copy off the Mac mini, add a folder to `backup.copyTo`, e.g. iCloud Drive:
+`~/Library/Mobile Documents/com~apple~CloudDocs/Factory backups`. A failed backup sends an alert.
+`factory backup` runs one now; `factory backup --list` lists them. Secrets aren't in backups (they're in 1Password).
+
+To restore: stop the orchestrator (`launchctl bootout gui/$(id -u)/eu.peterszn.factory.orchestrator`), move
+`~/factory/state` aside, then
+```bash
+mkdir -p ~/factory/state && cd ~/factory/state
+cp ~/factory/backups/<name>/factory.db . && tar -xzf ~/factory/backups/<name>/state.tar.gz
+```
+and start it again (`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/eu.peterszn.factory.orchestrator.plist`).
+
 ## Recovery
 
 | Symptom | What to do |

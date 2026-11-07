@@ -1,5 +1,8 @@
 import { parseArgs } from 'node:util';
 import { createApp } from './app.ts';
+import { listBackups, runBackup } from './backup.ts';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { approveMigration, rejectMigration } from './review.ts';
 import { dashboardToken } from './dashboard/server.ts';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -22,6 +25,7 @@ const HELP = `factory <command>
   reject <task-id>       Reject it; the task is parked
   requeue <task-id>      Put a parked or blocked task back in the queue (e.g. "habit-tracker#12")
   cancel <task-id>       Cancel a task
+  backup [--list]        Back up the state now (it also runs daily), or list the backups
   update [--now] [--wait <min>] [--yes]
                          Update the running factory to origin/main: checks first, restart, health check, rollback on failure
 `;
@@ -65,6 +69,16 @@ async function main(): Promise<void> {
   const now = app.now();
 
   switch (cmd) {
+    case 'backup': {
+      if (values.list || arg === '--list' || process.argv.includes('--list')) {
+        for (const b of listBackups(config)) console.log(`${b.name}  ${(b.bytes / 1024).toFixed(0)} KB`);
+        break;
+      }
+      const b = await runBackup(store, config, now, process.env.FACTORY_CONFIG ?? join(homedir(), 'factory', 'factory.config.yaml'));
+      store.setSetting('lastBackupAt', String(now));
+      console.log(`Backed up to ${b.path} (${(b.bytes / 1024).toFixed(0)} KB)${b.copies.length ? `; copies: ${b.copies.join(', ')}` : ''}.`);
+      break;
+    }
     case 'add-project': {
       if (!arg) throw new Error('Usage: add-project <repo>');
       const project = { id: arg, owner: config.github.owner, kind: values.kind as ProjectKind, state: 'active' as const, priority: Number(values.priority), createdAt: now };

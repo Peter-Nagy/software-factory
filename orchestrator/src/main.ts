@@ -1,6 +1,8 @@
 import { createApp, recoverInterrupted, stopAllRunners, syncIssues } from './app.ts';
 import { runBuild } from './pipeline.ts';
 import { startDashboard } from './dashboard/server.ts';
+import { backupDue, runBackup } from './backup.ts';
+import { localParts } from './discord/bot.ts';
 import { Bot } from './discord/bot.ts';
 import { containerIntake } from './discord/intake.ts';
 import { DiscordRest } from './discord/rest.ts';
@@ -67,6 +69,7 @@ async function main(): Promise<void> {
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
 
+  let backingUp = false;
   console.log(`Factory orchestrator started (tick ${config.schedule.tickSeconds}s).`);
   while (!stopping) {
     const now = app.now();
@@ -80,6 +83,21 @@ async function main(): Promise<void> {
       await bot.tick(now, config.schedule.timezone, config.schedule.digestHourLocal).catch((e: Error) => console.error(`Discord tick failed: ${e.message}`));
     } else {
       for (const t of applyTimeouts(app)) console.log(`Question #${t.id} timed out; applied "${t.answer}": ${t.effect}`);
+    }
+
+    if (config.backup.enabled && !backingUp) {
+      const last = store.getSetting('lastBackupAt');
+      if (backupDue(last ? Number(last) : null, now, localParts(now, config.schedule.timezone).hour, config.backup.hourLocal)) {
+        backingUp = true;
+        store.setSetting('lastBackupAt', String(now)); // also on failure: retried tomorrow, not every tick
+        runBackup(store, config, now, process.env.FACTORY_CONFIG)
+          .then((b) => store.event('backup.done', null, { path: b.path, bytes: b.bytes, copies: b.copies }))
+          .catch(async (e: Error) => {
+            store.event('backup.failed', null, { error: e.message });
+            await app.notify('alert', `Backup failed: ${e.message}`);
+          })
+          .finally(() => (backingUp = false));
+      }
     }
 
     const projects = store.projects();

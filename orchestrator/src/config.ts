@@ -113,6 +113,17 @@ export const FactoryConfigSchema = z.object({
       digestHourLocal: z.number().int().min(0).max(23).default(8),
     })
     .default({}),
+  /** Daily backups of the state (database, plans, studios, sessions) and the config. */
+  backup: z
+    .object({
+      enabled: z.boolean().default(true),
+      dir: pathString.default('~/factory/backups'),
+      /** Extra copies, e.g. a folder in iCloud Drive (~/Library/Mobile Documents/com~apple~CloudDocs/Factory backups). */
+      copyTo: z.array(pathString).default([]),
+      keep: z.number().int().min(1).default(14),
+      hourLocal: z.number().int().min(0).max(23).default(3),
+    })
+    .default({}),
 });
 export type FactoryConfig = z.infer<typeof FactoryConfigSchema>;
 export type GovernorConfig = z.infer<typeof GovernorConfigSchema>;

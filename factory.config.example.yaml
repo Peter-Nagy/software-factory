@@ -56,3 +56,10 @@ schedule:
   tickSeconds: 30
   timezone: Europe/Budapest
   digestHourLocal: 8
+
+# Daily backups of the state and this config (secrets live in 1Password, not here)
+backup:
+  dir: ~/factory/backups
+  keep: 14
+  hourLocal: 3
+  # copyTo: ["~/Library/Mobile Documents/com~apple~CloudDocs/Factory backups"]
