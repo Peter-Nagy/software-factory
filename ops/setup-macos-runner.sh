@@ -43,8 +43,12 @@ dscl . -create "/Users/$RUNNER_USER" IsHidden 1
 dscl . -create "/Users/$RUNNER_USER" UserShell /bin/bash
 dseditgroup -o edit -d "$RUNNER_USER" -t user staff 2>/dev/null || true
 dseditgroup -o edit -d "$RUNNER_USER" -t user admin 2>/dev/null || true
-[ -d "/Users/$RUNNER_USER" ] || createhomedir -c -u "$RUNNER_USER" >/dev/null
-chown -R "$RUNNER_USER:$RUNNER_USER" "/Users/$RUNNER_USER"
+if [ ! -d "/Users/$RUNNER_USER" ]; then
+  createhomedir -c -u "$RUNNER_USER" >/dev/null
+  chown -R "$RUNNER_USER:$RUNNER_USER" "/Users/$RUNNER_USER"
+fi
+# Only the top folder on later runs: macOS creates protected app containers inside that even root can't re-own.
+chown "$RUNNER_USER:$RUNNER_USER" "/Users/$RUNNER_USER"
 chmod 700 "/Users/$RUNNER_USER"
 # You join its group, so the orchestrator can prepare and push the checkouts the runner works in.
 dseditgroup -o edit -a "$OWNER" -t user "$RUNNER_USER"
