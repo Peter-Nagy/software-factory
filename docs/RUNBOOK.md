@@ -89,6 +89,18 @@ A lighter alternative (or addition) to Discord: push notifications through the f
    `dashboard: {publicUrl: https://<mac>.<tailnet>.ts.net:4777}` so tapping a notification opens the dashboard.
 4. Restart the orchestrator. You get questions and sign-offs (incl. the Studio's), alerts, and the morning digest.
 
+## Watchdog
+
+launchd restarts the orchestrator if it crashes; the watchdog catches one that is stuck. Every 5 minutes it checks
+`/api/health`; after two failures in a row it restarts the orchestrator and pushes an alert (if ntfy is set up), and
+it tells you when it's healthy again. `bash ops/setup.sh --launchd` installs it, or just the watchdog:
+```bash
+sed -e "s#__REPO_DIR__#$HOME/factory/software-factory#g" -e "s#__HOME__#$HOME#g" \
+  ~/factory/software-factory/ops/launchd/eu.peterszn.factory.watchdog.plist > ~/Library/LaunchAgents/eu.peterszn.factory.watchdog.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/eu.peterszn.factory.watchdog.plist
+```
+Pause it with `touch ~/factory/state/watchdog.off`. Log: `~/factory/logs/watchdog.log`.
+
 ## Backups
 
 Every day at 03:00 (`backup.hourLocal`) the orchestrator writes `~/factory/backups/<UTC time>/`: `factory.db` (a

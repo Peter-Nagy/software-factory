@@ -97,6 +97,12 @@ if [ "$WITH_LAUNCHD" = yes ]; then
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
   echo "Orchestrator running. Logs: $FACTORY_HOME/logs/orchestrator.log"
+  # The watchdog: restarts a stuck orchestrator and pushes an alert (see ops/watchdog.sh).
+  WPLIST="$HOME/Library/LaunchAgents/eu.peterszn.factory.watchdog.plist"
+  sed -e "s#__REPO_DIR__#$REPO_DIR#g" -e "s#__HOME__#$HOME#g" "$REPO_DIR/ops/launchd/eu.peterszn.factory.watchdog.plist" > "$WPLIST"
+  launchctl bootout "gui/$(id -u)" "$WPLIST" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$WPLIST"
+  echo "Watchdog checks /api/health every 5 minutes. Log: $FACTORY_HOME/logs/watchdog.log"
 fi
 
 step "Done"
