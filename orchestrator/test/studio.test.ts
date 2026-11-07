@@ -50,6 +50,7 @@ function setup() {
   const store = new Store(':memory:');
   const config = parseFactoryConfig(`github: {owner: me}\npaths: {state: ${root}/state, logs: ${root}/logs, workerConfig: ${root}/cfg}\ndashboard: {port: 0}`);
   const repos: { name: string; files: Record<string, string> }[] = [];
+  const notes: [string, string][] = [];
   const gh = {
     ensureLabels: async () => undefined,
     createIssue: async () => ({ number: 1, html_url: 'x' }),
@@ -60,12 +61,12 @@ function setup() {
   const ctx: DashboardContext = {
     config, store, secrets: new Secrets({ reader: async () => 'secret' }),
     repoAccess: async () => ({ gh, token: 't' }), repoClient: async () => ({ gh, token: 't' }),
-    now: () => Math.floor(Date.now() / 1000), notify: async () => undefined,
+    now: () => Math.floor(Date.now() / 1000), notify: async (kind, text) => void notes.push([kind, text]),
   };
   process.env.FACTORY_DOCKER_BIN = studioDocker;
   const mode = (id: number, phase: PhaseKey, m: string) => writeFileSync(join(studioWork(ctx, id), '..', `mode-${phase}`), m);
   const states = (id: number) => Object.fromEntries(studioPhases(ctx, id).map((p) => [p.phase, p.state]));
-  return { root, store, ctx, repos, mode, states, createRepo: async (p: { name: string; files: Record<string, string> }) => (repos.push(p), { owner: 'me', name: p.name }) };
+  return { root, store, ctx, repos, notes, mode, states, createRepo: async (p: { name: string; files: Record<string, string> }) => (repos.push(p), { owner: 'me', name: p.name }) };
 }
 
 test('studio, guided: phases open in order, approval unlocks the next, spikes skip when there is nothing to test', async () => {
@@ -266,7 +267,7 @@ test('studio interview: questions are structured, plain strings still work, and 
   assert.equal(parsed.questions[1]!.recommended, 'iPhone');
   assert.equal(PhaseStatusSchema.safeParse({ ready: true, questions: Array.from({ length: 16 }, () => 'q?') }).success, false);
 
-  const { ctx, mode } = setup();
+  const { ctx, mode, notes } = setup();
   const st = createStudio(ctx, { title: 'Run', mode: 'guided' });
   const prompt = () => readFileSync(join(studioWork(ctx, st.id), '..', 'args-brief'), 'utf8');
   mode(st.id, 'brief', 'interview');
@@ -280,10 +281,11 @@ test('studio interview: questions are structured, plain strings still work, and 
   setStudioMode(ctx, st.id, 'guided');
   await studioTurn(ctx, st.id, 'brief', 'Answers to your questions:\n\n> Which platforms?\nYour call');
   assert.match(prompt(), /Mode: guided[\s\S]*Answers to your questions/);
+  assert.deepEqual(notes.at(-1), ['question', 'Studio "Run": the brief agent has 2 questions.']);
 });
 
 test('studio skip: a stand-in answers round after round, then the owner reviews; edits go back, no edits approve', async () => {
-  const { ctx, mode, states } = setup();
+  const { ctx, mode, states, notes } = setup();
   const st = createStudio(ctx, { title: 'Run', mode: 'guided' });
   mode(st.id, 'brief', 'rounds');
   await studioTurn(ctx, st.id, 'brief', 'I want a running app');
@@ -322,6 +324,7 @@ test('studio skip: a stand-in answers round after round, then the owner reviews;
   mode(st.id, 'brief', 'done');
   await autoInterview(ctx, st.id, 'brief');
   assert.deepEqual(latestAnswers(ctx, st.id, 'brief').map((a) => a.batch), [2, 2]);
+  assert.match(notes.at(-1)![1], /Brief answers are ready for your review \(1 round\)/);
   const ok = reviewAnswers(ctx, st.id, 'brief', []);
   assert.deepEqual(ok, { message: null, approved: true, next: { phase: 'research', state: 'ready' } });
   assert.equal(states(st.id).brief, 'approved');

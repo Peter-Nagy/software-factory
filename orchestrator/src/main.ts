@@ -3,6 +3,8 @@ import { runBuild } from './pipeline.ts';
 import { startDashboard } from './dashboard/server.ts';
 import { backupDue, runBackup } from './backup.ts';
 import { localParts } from './discord/bot.ts';
+import { digestText } from './discord/digest.ts';
+import { pushFor, sendNtfy, type NotifyKind } from './push.ts';
 import { Bot } from './discord/bot.ts';
 import { containerIntake } from './discord/intake.ts';
 import { DiscordRest } from './discord/rest.ts';
@@ -38,6 +40,37 @@ async function main(): Promise<void> {
     } catch (e) {
       bot = null;
       console.error(`Discord bot not started: ${(e as Error).message}`);
+    }
+  }
+
+  // Phone push (optional): questions and alerts right away, the digest once a day when Discord isn't doing it.
+  let pushDigest: ((now: number) => Promise<void>) | null = null;
+  if (config.push) {
+    try {
+      const { server, topicSecret, info } = config.push.ntfy;
+      const topic = await app.secrets.get(topicSecret);
+      const publicUrl = config.dashboard.publicUrl ?? null;
+      const send = (kind: NotifyKind, text: string) => {
+        const m = pushFor(kind, text, { publicUrl, info });
+        return m ? sendNtfy(server, topic, m).catch((e: Error) => console.error(`Push failed: ${e.message}`)) : Promise.resolve();
+      };
+      const before = app.notify;
+      app.notify = async (kind, text) => {
+        await before(kind, text);
+        await send(kind, text);
+      };
+      if (!bot) {
+        pushDigest = async (now) => {
+          const local = localParts(now, config.schedule.timezone);
+          if (local.hour < config.schedule.digestHourLocal || store.getSetting('lastPushDigestDate') === local.date) return;
+          store.setSetting('lastPushDigestDate', local.date);
+          const m = pushFor('alert', digestText(store, now, config.schedule.timezone).replace(/\*\*/g, ''), { publicUrl, info: true });
+          if (m) await sendNtfy(server, topic, { ...m, priority: 3, tags: ['sunrise'] }).catch((e: Error) => console.error(`Push digest failed: ${e.message}`));
+        };
+      }
+      console.log(`Push notifications on (${new URL(server).host}).`);
+    } catch (e) {
+      console.error(`Push notifications not started: ${(e as Error).message}`);
     }
   }
 
@@ -79,6 +112,7 @@ async function main(): Promise<void> {
       lastSync = now;
     }
 
+    if (pushDigest) await pushDigest(now);
     if (bot) {
       await bot.tick(now, config.schedule.timezone, config.schedule.digestHourLocal).catch((e: Error) => console.error(`Discord tick failed: ${e.message}`));
     } else {

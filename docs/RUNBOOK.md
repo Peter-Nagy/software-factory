@@ -79,6 +79,16 @@ version running. Otherwise it restarts and waits for `/api/health` to report the
 if that doesn't happen within 3 minutes it rolls back to the previous commit and restarts that. Log:
 `~/factory/logs/update.log`. Health: `curl http://127.0.0.1:4777/api/health` (local only).
 
+## Phone notifications (ntfy)
+
+A lighter alternative (or addition) to Discord: push notifications through the free ntfy app.
+1. Install ntfy on the phone and subscribe to a long random topic name, e.g. `factory-` plus 20 random characters
+   (anyone who knows the name can read the notifications).
+2. Store the topic name as `NTFY_TOPIC` in the 1Password Factory vault.
+3. In `factory.config.yaml`: `push: {ntfy: {}}` (or `{server: https://your-ntfy, info: true}` to also get merges), and
+   `dashboard: {publicUrl: https://<mac>.<tailnet>.ts.net:4777}` so tapping a notification opens the dashboard.
+4. Restart the orchestrator. You get questions and sign-offs (incl. the Studio's), alerts, and the morning digest.
+
 ## Backups
 
 Every day at 03:00 (`backup.hourLocal`) the orchestrator writes `~/factory/backups/<UTC time>/`: `factory.db` (a

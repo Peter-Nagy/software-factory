@@ -428,7 +428,13 @@ async function phaseTurn(ctx: PipelineContext, studio: Studio, row: PhaseRow, te
       addMessage(ctx, id, row.phase, 'agent', result.resultText || '(no reply)');
       const hasDoc = readDoc(ctx, id, def.doc) !== null;
       setPhase(ctx, id, row.phase, { state: hasDoc ? 'drafting' : wasState === 'queued' ? 'ready' : wasState, note: null });
-      if (hasDoc && auto) autopilotAfterTurn(ctx, id, row.phase);
+      const paused = hasDoc && auto && autopilotAfterTurn(ctx, id, row.phase) === 'stopped';
+      // Tell the owner when the studio waits on them (not mid-way through a stand-in interview).
+      const asks = readStatus(ctx, id, row.phase)?.questions.length ?? 0;
+      if (!standin && phaseRow(ctx, id, row.phase).autoAnswer === null && (paused || (asks > 0 && studio.mode === 'guided'))) {
+        const what = asks ? `the ${def.title.toLowerCase()} agent has ${asks === 1 ? 'a question' : `${asks} questions`}` : `${def.title} is ready for you to look at`;
+        await ctx.notify('question', `Studio "${studio.title}": ${what}.`).catch(() => undefined);
+      }
       return true;
     } else {
       const why = result.hitUsageLimit ? 'The usage limit was reached; try again after it resets.' : `The agent stopped: ${result.resultText.slice(0, 500) || 'no result'}`;
@@ -667,6 +673,7 @@ export async function autoInterview(ctx: PipelineContext, id: number, phase: Pha
   const end = problem ? `It stopped early (${problem}).` : left ? `It stopped after ${MAX_STANDIN_ROUNDS} rounds with ${left} questions still open.` : 'The agent has no more questions.';
   addMessage(ctx, id, phase, 'system', `Answered ${rounds} round${rounds === 1 ? '' : 's'} for you. ${end} Review the answers, change any, then continue.`);
   setPhase(ctx, id, phase, { note: 'Review the answers given for you, then continue.' });
+  await ctx.notify('question', `Studio "${getStudio(ctx, id)!.title}": ${phaseDef(phase).title} answers are ready for your review (${rounds} round${rounds === 1 ? '' : 's'}).`).catch(() => undefined);
 }
 
 /** The owner wants to answer themselves again: the loop stops after the current step. */

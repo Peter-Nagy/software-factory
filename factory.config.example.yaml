@@ -63,3 +63,7 @@ backup:
   keep: 14
   hourLocal: 3
   # copyTo: ["~/Library/Mobile Documents/com~apple~CloudDocs/Factory backups"]
+
+# Phone push notifications through ntfy (see docs/RUNBOOK.md); the topic name is a secret
+# push:
+#   ntfy: {server: https://ntfy.sh, topicSecret: NTFY_TOPIC, info: false}

@@ -96,8 +96,22 @@ export const FactoryConfigSchema = z.object({
       port: z.number().int().min(0).max(65535).default(4777), // 0 = any free port (tests)
       /** Host names the browser may use, besides localhost. Any *.ts.net name (Tailscale) is always allowed. */
       allowedHosts: z.array(z.string()).default([]),
+      /** How your phone reaches the dashboard (e.g. https://mac-mini.tailnet.ts.net:4777); links in notifications. */
+      publicUrl: z.string().url().optional(),
     })
     .default({}),
+  /** Phone push notifications through ntfy. Leave out for none (or use Discord). */
+  push: z
+    .object({
+      ntfy: z.object({
+        server: z.string().url().default('https://ntfy.sh'),
+        /** Secret holding the topic name: anyone who knows it can read the notifications, so pick a long random one. */
+        topicSecret: z.string().default('NTFY_TOPIC'),
+        /** Also push merges and other news (otherwise only questions and alerts, plus the daily digest). */
+        info: z.boolean().default(false),
+      }),
+    })
+    .optional(),
   /** Discord remote control. Leave out to run without it (notifications go to the log). */
   discord: z
     .object({
