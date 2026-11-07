@@ -73,7 +73,8 @@ const CREATE_SIMULATOR = [
   XCODE_DEFAULTS, // every run that may build gets a Simulator first, so the settings are always in place
   "rt=$(xcrun simctl list -j runtimes | jq -r '[.runtimes[] | select(.platform == \"iOS\" and .isAvailable)] | last | .identifier // empty')",
   '[ -n "$rt" ] || { echo "no iOS Simulator runtime installed (xcodebuild -downloadPlatform iOS)" >&2; exit 1; }',
-  "dt=$(xcrun simctl list -j runtimes | jq -r --arg rt \"$rt\" '.runtimes[] | select(.identifier == $rt) | [.supportedDeviceTypes[] | select(.productFamily == \"iPhone\")] | last | .identifier // empty')",
+  // the newest iPhone the runtime supports (the list isn't ordered by age; minRuntimeVersion is)
+  'dt=$(jq -rn --arg rt "$rt" --argjson r "$(xcrun simctl list -j runtimes)" --argjson d "$(xcrun simctl list -j devicetypes)" \'[$r.runtimes[] | select(.identifier == $rt) | .supportedDeviceTypes[] | select(.productFamily == "iPhone") | .identifier] as $ok | [$d.devicetypes[] | select(.identifier as $i | $ok | index($i))] | sort_by(.minRuntimeVersion) | last | .identifier // empty\')',
   'xcrun simctl create "$FACTORY_SIMULATOR_NAME" "$dt" "$rt"',
 ].join('\n');
 

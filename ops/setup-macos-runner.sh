@@ -75,6 +75,9 @@ fi
 sudo -u "$RUNNER_USER" -H bash -c 'cd ~ && ~/.local/bin/claude --version'
 
 say "Xcode: license, first-launch packages, iOS Simulator runtime"
+# Developer tools access: without it, Xcode can't attach its test runner to a Simulator ("failed to bless service hub").
+DevToolsSecurity -enable
+dseditgroup -o edit -a "$RUNNER_USER" -t user _developer
 xcodebuild -license accept
 xcodebuild -runFirstLaunch
 if ! xcrun simctl list runtimes | grep -q '^iOS'; then
@@ -91,6 +94,7 @@ else
 fi
 dsmemberutil checkmembership -U "$RUNNER_USER" -G staff
 dsmemberutil checkmembership -U "$RUNNER_USER" -G admin
+DevToolsSecurity -status
 
 cat <<EOF
 
