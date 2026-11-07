@@ -12,6 +12,8 @@ export interface ProcessSpec {
   env: Record<string, string>;
   /** Written to stdin, then closed (the macOS runner takes its env as JSON there). */
   stdin?: string;
+  /** Working directory to start in (default: the orchestrator's). */
+  cwd?: string;
   /** How to stop it on timeout (docker kill <name>, or a signal). */
   kill(child: ChildProcess): void;
 }
@@ -25,6 +27,7 @@ export interface StreamOptions {
 
 function start(p: ProcessSpec): ChildProcess {
   const child = spawn(p.cmd, p.args, {
+    cwd: p.cwd,
     env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/tmp', ...p.env },
     stdio: [p.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
   });

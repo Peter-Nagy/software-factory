@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { RUN_DIR } from '../gates/contract.ts';
@@ -120,6 +120,16 @@ export function excludeRunDir(dir: string): void {
   if (!kept.some((l) => l.trim() === `${RUN_DIR}/`)) kept.push(`${RUN_DIR}/`);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${kept.join('\n')}\n`);
+}
+
+/**
+ * mkdir -p that, inside a shared checkout, leaves every directory it creates group-writable (setgid), so the
+ * macOS runner user can write there too (agent summary, test reports).
+ */
+export function makeDir(path: string): void {
+  const created = mkdirSync(path, { recursive: true });
+  if (!created || !isShared(path)) return;
+  for (let d = path; d.length >= created.length; d = dirname(d)) chmodSync(d, 0o2775);
 }
 
 export function removeCheckout(dir: string): void {

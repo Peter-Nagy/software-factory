@@ -34,7 +34,7 @@ import { promptPath, reviewerModel, roleConfig } from './roles.ts';
 import { removeVolume, runCommandInContainer, runInContainer } from './runner/container.ts';
 import { projectImage } from './runner/image.ts';
 import { createSimulator, deleteSimulator, runCommandOnMac } from './runner/macos.ts';
-import { changedFiles, changePatchId, checkoutPath, containsBase, diffSize, git, gitRemote, headSha, prepareCheckout, redact } from './runner/worktree.ts';
+import { changedFiles, changePatchId, checkoutPath, containsBase, diffSize, git, gitRemote, headSha, makeDir, prepareCheckout, redact } from './runner/worktree.ts';
 import { branchName } from './tasks.ts';
 import type { Model, Project, RunResult, Task } from './types.ts';
 import { snapshotAfterRun } from './usage.ts';
@@ -182,7 +182,7 @@ export async function runReviewStage(ctx: PipelineContext, project: Project, tas
       for (const step of steps) {
         const reportDir = join(dir, RUN_DIR, 'reports', step.name);
         rmSync(reportDir, { recursive: true, force: true });
-        mkdirSync(reportDir, { recursive: true });
+        makeDir(reportDir);
         const onMac = runner === 'macos' && CHECK_ORDER.includes(step.name as CheckName);
         const env = {
           ...secrets,

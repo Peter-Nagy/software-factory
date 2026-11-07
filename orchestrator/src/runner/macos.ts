@@ -24,6 +24,7 @@ function macProcess(cfg: MacosConfig, worktree: string, command: string[], env: 
     args: ['-n', '-u', cfg.user, runScript(cfg), worktree, '--', ...command],
     env: {},
     stdin: JSON.stringify(env),
+    cwd: '/', // the runner user can't enter the owner's home, where the orchestrator itself runs
     // sudo relays the signal to the runner, which stops the command's whole process group.
     kill: (child: ChildProcess) => {
       child.kill('SIGTERM');
@@ -42,7 +43,7 @@ export function runCommandOnMac(cfg: MacosConfig, worktree: string, command: str
 
 /** Stop everything the runner user is running and delete its Simulator devices (startup and shutdown). */
 export function cleanupMac(cfg: MacosConfig): void {
-  spawnSync(sudoBin(), ['-n', '-u', cfg.user, runScript(cfg), '--cleanup'], { stdio: 'ignore', input: '' });
+  spawnSync(sudoBin(), ['-n', '-u', cfg.user, runScript(cfg), '--cleanup'], { stdio: 'ignore', input: '', cwd: '/' });
 }
 
 /** The runner can't read the owner's home, so it gets a copy of the worker config in its own root. */

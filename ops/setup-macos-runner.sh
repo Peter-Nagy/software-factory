@@ -12,6 +12,7 @@ set -euo pipefail
 RUNNER_USER=factory-ios
 ROOT=/Users/Shared/factory-macos
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
+cd / # commands run as the runner user can't enter your home folder
 
 [ "$(id -u)" = 0 ] || { echo "Run with sudo: sudo $0" >&2; exit 1; }
 OWNER=${SUDO_USER:-}

@@ -11,7 +11,7 @@ import { promptPath, roleConfig } from './roles.ts';
 import { runInContainer } from './runner/container.ts';
 import { projectImage } from './runner/image.ts';
 import { createSimulator, deleteSimulator, runAgentOnMac, worktreesDir as macWorktreesDir } from './runner/macos.ts';
-import { checkoutPath, git, gitRemote, hasUnpushedCommits, prepareCheckout, redact } from './runner/worktree.ts';
+import { checkoutPath, git, gitRemote, hasUnpushedCommits, makeDir, prepareCheckout, redact } from './runner/worktree.ts';
 import type { Secrets } from './secrets.ts';
 import { branchName } from './tasks.ts';
 import type { Model, Project, RunResult, Task } from './types.ts';
@@ -162,7 +162,7 @@ export async function runBuild(ctx: PipelineContext, project: Project, task: Tas
   await prepareCheckout({ remoteUrl, dir, branch, token });
   const factoryDir = join(dir, FACTORY_DIR);
   rmSync(factoryDir, { recursive: true, force: true }); // never act on a previous run's question or summary
-  mkdirSync(factoryDir, { recursive: true });
+  makeDir(factoryDir);
 
   const projectConfig = await loadProjectConfig(dir);
   mkdirSync(config.paths.logs, { recursive: true });
