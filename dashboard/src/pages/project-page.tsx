@@ -1,16 +1,14 @@
-import { ExternalLink, Lightbulb, Pause, Play, Plus, Sparkles } from "lucide-react"
+import { ChevronRight, ExternalLink, Lightbulb, Pause, Play, Plus, Sparkles } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { Board } from "@/components/board"
 import { AddTaskDialog, NewPlanDialog } from "@/components/dialogs"
 import { Markdown } from "@/components/markdown"
 import { QuestionCard } from "@/components/question-card"
-import { TaskSheet } from "@/components/task-sheet"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, enc, type ProjectDetail, type Task } from "@/lib/api"
+import { ProjectAvatar, projectGradient, SectionTitle } from "@/components/visual"
+import { api, enc, type ProjectDetail } from "@/lib/api"
 import { useFactory } from "@/lib/factory"
 import { ago, repoUrl } from "@/lib/format"
 import { Link } from "@/lib/router"
@@ -19,7 +17,6 @@ import { usePoll } from "@/lib/use-poll"
 export function ProjectPage({ id }: { id: string }) {
   const { state, reload: reloadState } = useFactory()
   const { data, error, reload } = usePoll(() => api<ProjectDetail>("GET", `projects/${enc(id)}`), 8000, [id])
-  const [open, setOpen] = useState<Task | null>(null)
   const [addTask, setAddTask] = useState(false)
   const [plan, setPlan] = useState<"change" | "goals" | null>(null)
   const refresh = async () => {
@@ -27,10 +24,12 @@ export function ProjectPage({ id }: { id: string }) {
   }
 
   if (error && !data) return <p className="text-sm text-muted-foreground">{error}</p>
-  if (!data) return <Skeleton className="h-96 w-full" />
+  if (!data) return <div className="space-y-4"><Skeleton className="h-44 w-full rounded-[2rem]" /><Skeleton className="h-96 w-full rounded-3xl" /></div>
   const { project, tasks, product, plans, questions } = data
   const paused = project.state === "paused"
   const activePlans = plans.filter((p) => p.state !== "executed")
+  const open = tasks.filter((t) => !["done", "cancelled"].includes(t.state)).length
+  const needYou = tasks.filter((t) => t.state === "parked" || t.state === "blocked").length
 
   const toggle = async () => {
     try {
@@ -43,94 +42,90 @@ export function ProjectPage({ id }: { id: string }) {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <div>
-          <p className="text-xs text-muted-foreground">
-            <Link href="/projects" className="hover:underline">Projects</Link> /
-          </p>
-          <h1 className="text-xl font-semibold">{project.id}</h1>
+    <div className="space-y-8">
+      <section className="relative overflow-hidden rounded-[2rem] text-white shadow-elevation">
+        <div className="absolute inset-0" style={{ background: projectGradient(project.id) }} />
+        <div className="absolute inset-0 bg-[radial-gradient(90%_120%_at_100%_0%,rgb(255_255_255/0.25),transparent_55%),linear-gradient(to_top,rgb(0_0_0/0.25),transparent_60%)]" />
+        <div className="relative p-6 sm:p-8">
+          <Link href="/projects" className="text-sm text-white/75 hover:text-white">Projects</Link>
+          <div className="mt-3 flex flex-wrap items-end gap-4">
+            <ProjectAvatar id={project.id} className="size-16 rounded-2xl text-lg ring-2 ring-white/30" />
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-3xl font-semibold tracking-tight sm:text-4xl">{project.id}</h1>
+              <p className="mt-1 text-sm text-white/80">{project.kind} · priority {project.priority}{paused ? " · paused" : ""}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" className="border-white/25 bg-white/15 text-white hover:bg-white/25 hover:text-white dark:bg-white/15" render={<a href={repoUrl(project.owner, project.id)} target="_blank" rel="noopener noreferrer" />}>
+                Repo <ExternalLink />
+              </Button>
+              <Button size="sm" variant="outline" className="border-white/25 bg-white/15 text-white hover:bg-white/25 hover:text-white dark:bg-white/15" onClick={toggle}>
+                {paused ? <><Play /> Resume</> : <><Pause /> Pause</>}
+              </Button>
+            </div>
+          </div>
+          <div className="mt-6 grid grid-cols-3 gap-2 sm:max-w-md">
+            {[{ n: open, l: "open" }, { n: data.merged30d, l: "merged · 30 d" }, { n: needYou, l: "need you" }].map((s) => (
+              <div key={s.l} className="rounded-2xl bg-white/14 px-3 py-2.5 ring-1 ring-white/15 backdrop-blur">
+                <div className="text-2xl font-semibold tracking-tight tabular-nums">{s.n}</div>
+                <div className="text-[11px] text-white/75">{s.l}</div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          <Badge variant="secondary">{project.kind}</Badge>
-          <Badge variant={paused ? "destructive" : "outline"}>{project.state}</Badge>
-          <Badge variant="outline">priority {project.priority}</Badge>
-        </div>
-        <div className="ml-auto flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" render={<a href={repoUrl(project.owner, project.id)} target="_blank" rel="noopener noreferrer" />}>
-            Repo <ExternalLink />
-          </Button>
-          <Button variant="outline" size="sm" onClick={toggle}>{paused ? <><Play /> Resume</> : <><Pause /> Pause</>}</Button>
-          <Button variant="outline" size="sm" onClick={() => setPlan("change")}><Lightbulb /> Plan a change</Button>
-          <Button size="sm" onClick={() => setAddTask(true)}><Plus /> Task</Button>
-        </div>
+      </section>
+
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => setAddTask(true)}><Plus /> Task</Button>
+        <Button variant="outline" onClick={() => setPlan("change")}><Lightbulb /> Plan a change</Button>
+        <Button variant="outline" onClick={() => setPlan("goals")}><Sparkles /> Iterate on goals</Button>
       </div>
 
       {questions.length > 0 && (
-        <div className="grid gap-3 md:grid-cols-2">
-          {questions.map((q) => <QuestionCard key={q.id} q={q} timezone={state.timezone} onDone={refresh} />)}
-        </div>
+        <section>
+          <SectionTitle count={questions.length}>Needs you</SectionTitle>
+          <div className="grid gap-3 md:grid-cols-2">
+            {questions.map((q) => <QuestionCard key={q.id} q={q} timezone={state.timezone} onDone={refresh} />)}
+          </div>
+        </section>
       )}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <Card>
-          <CardHeader className="flex flex-row items-start justify-between gap-3">
-            <div>
-              <CardTitle>Goals and details</CardTitle>
-              <CardDescription>docs/PRODUCT.md on main</CardDescription>
-            </div>
-            <Button size="sm" variant="secondary" onClick={() => setPlan("goals")}><Sparkles /> Iterate with the agent</Button>
-          </CardHeader>
-          <CardContent className="max-h-[32rem] overflow-y-auto">
+        <section className="rounded-3xl border bg-card p-5 shadow-elevation sm:p-6">
+          <SectionTitle action={<Button size="sm" variant="secondary" onClick={() => setPlan("goals")}><Sparkles /> Iterate with the agent</Button>}>Goals and details</SectionTitle>
+          <div className="max-h-[32rem] overflow-y-auto pr-1">
             {product ? <Markdown text={product} /> : (
               <p className="text-sm text-muted-foreground">No docs/PRODUCT.md yet. Iterate with the agent to write the project's goals; they land in the repo through a reviewed PR.</p>
             )}
-          </CardContent>
-        </Card>
-        <div className="space-y-4">
-          <Card>
-            <CardHeader><CardTitle>Progress</CardTitle></CardHeader>
-            <CardContent className="grid grid-cols-3 gap-3 text-center">
-              {[
-                { n: tasks.filter((t) => !["done", "cancelled"].includes(t.state)).length, label: "open" },
-                { n: data.merged30d, label: "merged (30 d)" },
-                { n: tasks.filter((t) => t.state === "parked" || t.state === "blocked").length, label: "need you" },
-              ].map((s) => (
-                <div key={s.label} className="rounded-lg bg-muted/60 py-3">
-                  <div className="text-2xl font-semibold tabular-nums">{s.n}</div>
-                  <div className="text-xs text-muted-foreground">{s.label}</div>
-                </div>
+          </div>
+        </section>
+        <section className="rounded-3xl border bg-card p-5 shadow-elevation sm:p-6">
+          <SectionTitle count={plans.length}>Plans</SectionTitle>
+          {plans.length === 0 ? <p className="text-sm text-muted-foreground">No plans for this project yet.</p> : (
+            <ul className="-mx-2 space-y-1">
+              {[...activePlans, ...plans.filter((p) => p.state === "executed")].slice(0, 8).map((p) => (
+                <li key={p.id}>
+                  <Link href={`/plans/${p.id}`} className="flex items-center gap-3 rounded-2xl px-2 py-2.5 text-sm transition-colors hover:bg-muted/60">
+                    <span className={`inline-flex size-8 shrink-0 items-center justify-center rounded-full ${p.focus === "goals" ? "bg-fuchsia-500/12 text-fuchsia-600 dark:text-fuchsia-300" : "bg-violet-500/12 text-violet-600 dark:text-violet-300"}`}>
+                      {p.focus === "goals" ? <Sparkles className="size-4" /> : <Lightbulb className="size-4" />}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">{p.title}</p>
+                      <p className="text-xs text-muted-foreground">{p.state} · {ago(p.updatedAt)}</p>
+                    </div>
+                    <ChevronRight className="size-4 text-muted-foreground" />
+                  </Link>
+                </li>
               ))}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader><CardTitle>Plans</CardTitle></CardHeader>
-            <CardContent>
-              {plans.length === 0 ? <p className="text-sm text-muted-foreground">No plans for this project yet.</p> : (
-                <ul className="divide-y text-sm">
-                  {[...activePlans, ...plans.filter((p) => p.state === "executed")].slice(0, 8).map((p) => (
-                    <li key={p.id}>
-                      <Link href={`/plans/${p.id}`} className="flex items-center gap-2 py-2 hover:underline">
-                        <span className="truncate">{p.title}</span>
-                        {p.focus === "goals" && <Badge variant="secondary" className="h-4.5 text-[10px]">goals</Badge>}
-                        <Badge variant="outline" className="ml-auto h-4.5 text-[10px]">{p.state}</Badge>
-                        <span className="text-xs text-muted-foreground">{ago(p.updatedAt)}</span>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+            </ul>
+          )}
+        </section>
       </div>
 
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold">Board</h2>
-        <Board tasks={tasks} owner={project.owner} questions={state.questions} showProject={false} onOpen={setOpen} />
+      <section>
+        <SectionTitle count={open}>Board</SectionTitle>
+        <Board tasks={tasks} owner={project.owner} questions={state.questions} showProject={false} />
       </section>
 
-      <TaskSheet task={open} owner={project.owner} timezone={state.timezone} questions={state.questions} onClose={() => setOpen(null)} onChanged={refresh} />
       <AddTaskDialog project={project} open={addTask} onOpenChange={setAddTask} onCreated={refresh} />
       {plan && <NewPlanDialog key={plan} open onOpenChange={(o) => !o && setPlan(null)} projects={state.projects} project={project} focus={plan} />}
     </div>

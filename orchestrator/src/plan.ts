@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { buildClaudeArgs } from './claude.ts';
@@ -11,8 +11,11 @@ import type { Model, Project, ProjectKind } from './types.ts';
 import { snapshotAfterRun } from './usage.ts';
 
 export type PlanTarget = 'new' | 'existing';
-/** change = features or fixes; goals = iterate on the project's goals (docs/PRODUCT.md), issues optional. */
-export type PlanFocus = 'change' | 'goals';
+/**
+ * change = features or fixes; goals = iterate on the project's goals (docs/PRODUCT.md), issues optional;
+ * issue = revise one existing issue (applied to it, as often as the owner likes).
+ */
+export type PlanFocus = 'change' | 'goals' | 'issue';
 export type PlanState = 'drafting' | 'thinking' | 'executing' | 'executed' | 'failed' | 'archived';
 
 export interface Plan {
@@ -21,6 +24,7 @@ export interface Plan {
   target: PlanTarget;
   focus: PlanFocus;
   projectId: string | null;
+  issueNumber: number | null;
   state: PlanState;
   model: Model;
   sessionId: string | null;
@@ -75,6 +79,7 @@ const toPlan = (r: Row): Plan => ({
   target: r.target as PlanTarget,
   focus: ((r.focus as string | undefined) ?? 'change') as PlanFocus,
   projectId: (r.project_id as string | null) ?? null,
+  issueNumber: r.issue_number == null ? null : Number(r.issue_number),
   state: r.state as PlanState,
   model: r.model as Model,
   sessionId: (r.session_id as string | null) ?? null,
@@ -119,16 +124,25 @@ function update(ctx: Pick<PipelineContext, 'store' | 'now'>, id: number, patch: 
     .run(patch.state ?? cur.state, patch.sessionId === undefined ? cur.sessionId : patch.sessionId, JSON.stringify(patch.result ?? cur.result), patch.title ?? cur.title, patch.model ?? cur.model, ctx.now(), id);
 }
 
-export function createPlan(ctx: PipelineContext, p: { title: string; target: PlanTarget; projectId?: string | null; model?: Model; focus?: PlanFocus }): Plan {
+export function createPlan(ctx: PipelineContext, p: { title: string; target: PlanTarget; projectId?: string | null; model?: Model; focus?: PlanFocus; issueNumber?: number }): Plan {
   if (p.target === 'existing' && !ctx.store.projects().some((x) => x.id === p.projectId)) throw new Error(`Unknown project ${p.projectId}`);
-  const focus: PlanFocus = p.target === 'existing' && p.focus === 'goals' ? 'goals' : 'change';
+  const focus: PlanFocus = p.target !== 'existing' ? 'change' : p.focus === 'goals' ? 'goals' : p.focus === 'issue' ? 'issue' : 'change';
+  if (focus === 'issue' && !(Number.isInteger(p.issueNumber) && p.issueNumber! > 0)) throw new Error('An issue conversation needs the issue number');
   const r = ctx.store.db
-    .prepare('INSERT INTO plans (title, target, focus, project_id, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(p.title.slice(0, 100), p.target, focus, p.target === 'existing' ? p.projectId! : null, p.model ?? 'opus', ctx.now(), ctx.now());
+    .prepare('INSERT INTO plans (title, target, focus, project_id, issue_number, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(p.title.slice(0, 100), p.target, focus, p.target === 'existing' ? p.projectId! : null, focus === 'issue' ? p.issueNumber! : null, p.model ?? (focus === 'issue' ? 'sonnet' : 'opus'), ctx.now(), ctx.now());
   const id = Number(r.lastInsertRowid);
   mkdirSync(join(planDir(ctx, id), 'work', 'plan'), { recursive: true });
   mkdirSync(join(planDir(ctx, id), 'sessions'), { recursive: true });
   return getPlan(ctx, id)!;
+}
+
+/** The ongoing conversation about one issue, if there is one. */
+export function issuePlanFor(ctx: Pick<PipelineContext, 'store'>, projectId: string, issueNumber: number): Plan | null {
+  const r = ctx.store.db
+    .prepare(`SELECT * FROM plans WHERE focus = 'issue' AND project_id = ? AND issue_number = ? AND state != 'archived' ORDER BY id DESC LIMIT 1`)
+    .get(projectId, issueNumber) as Row | undefined;
+  return r ? toPlan(r) : null;
 }
 
 export function setPlanModel(ctx: PipelineContext, id: number, model: Model): void {
@@ -147,11 +161,31 @@ export function archivePlan(ctx: PipelineContext, id: number): void {
 export interface PlanFiles {
   product: string | null;
   plan: PlanFile | null;
+  /** Issue conversations: the revised issue (ISSUE.md: "# title" line, then the body). */
+  issue?: { title: string; body: string } | null;
   errors: string[];
+}
+
+export const ISSUE_FILE = 'ISSUE.md';
+
+/** "# Title" on the first non-empty line, the rest is the body. */
+export function parseIssueFile(text: string): { title: string; body: string } | null {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const first = lines.findIndex((l) => l.trim() !== '');
+  const m = first >= 0 ? lines[first]!.match(/^#\s+(.{3,120})$/) : null;
+  if (!m) return null;
+  const body = lines.slice(first + 1).join('\n').trim();
+  return body.length >= 10 ? { title: m[1]!.trim(), body } : null;
 }
 
 export function readPlanFiles(ctx: Pick<PipelineContext, 'config'>, plan: Plan): PlanFiles {
   const dir = join(planDir(ctx, plan.id), 'work', 'plan');
+  if (plan.focus === 'issue') {
+    const path = join(dir, ISSUE_FILE);
+    if (!existsSync(path)) return { product: null, plan: null, issue: null, errors: ['The planner has not written ISSUE.md yet.'] };
+    const issue = parseIssueFile(readFileSync(path, 'utf8'));
+    return { product: null, plan: null, issue, errors: issue ? [] : ['ISSUE.md needs a "# Title" first line and a body of at least 10 characters.'] };
+  }
   const product = existsSync(join(dir, 'PRODUCT.md')) ? readFileSync(join(dir, 'PRODUCT.md'), 'utf8') : null;
   if (!existsSync(join(dir, 'plan.json'))) return { product, plan: null, errors: ['The planner has not written plan.json yet.'] };
   let raw: unknown;
@@ -221,8 +255,14 @@ export async function planTurn(ctx: PipelineContext, id: number, text: string): 
     const env: Record<string, string> = { [config.worker.claudeTokenEnv]: await ctx.secrets.get(config.worker.claudeTokenEnv) };
     if (plan.target === 'existing' && plan.projectId) {
       const project = store.projects().find((p) => p.id === plan.projectId)!;
-      const { token } = await ctx.repoAccess(project);
+      const { gh, token } = await ctx.repoAccess(project);
       readToken = token;
+      // An issue conversation starts from the issue as it is on GitHub.
+      const issueFile = join(dir, 'work', 'plan', ISSUE_FILE);
+      if (plan.focus === 'issue' && plan.issueNumber && !existsSync(issueFile)) {
+        const issue = await gh.issue(project.owner, project.id, plan.issueNumber);
+        writeFileSync(issueFile, `# ${issue.title}\n\n${(issue.body ?? '').trim()}\n`);
+      }
       env.GH_TOKEN = token;
       const repoDir = join(dir, 'repo');
       rmSync(repoDir, { recursive: true, force: true });
@@ -235,14 +275,22 @@ export async function planTurn(ctx: PipelineContext, id: number, text: string): 
       ? [
           plan.target === 'new'
             ? `The owner wants to plan a new project: "${plan.title}".`
-            : plan.focus === 'goals'
+            : plan.focus === 'issue'
+              ? [
+                  `The owner wants to revise issue #${plan.issueNumber} of the project ${plan.projectId} (code in /work/repo).`,
+                  `/work/plan/${ISSUE_FILE} holds the issue as it is now: a "# Title" line, then the body. Revise that file as you`,
+                  'discuss: a clear title, 2-3 lines of context, and testable acceptance criteria. Agents build it unattended from',
+                  'exactly this text. Write no PRODUCT.md or plan.json. Read the code first when the change depends on it.',
+                  'Comments on the issue: gh issue view <n> --json comments.',
+                ].join('\n')
+              : plan.focus === 'goals'
               ? [
                   `The owner wants to iterate on the goals of the project ${plan.projectId} (code in /work/repo): "${plan.title}".`,
                   'Start /work/plan/PRODUCT.md as a copy of /work/repo/docs/PRODUCT.md (if there is one) and revise it as you discuss.',
                   'Add issues to plan.json only for work the revised goals need now; none is fine.',
                 ].join('\n')
               : `The owner wants to plan a change to the existing project ${plan.projectId} (code in /work/repo): "${plan.title}".`,
-          'Start PRODUCT.md and plan.json in /work/plan right away from what you know, then discuss.',
+          plan.focus === 'issue' ? 'Make the first revision right away from what you know, then discuss.' : 'Start PRODUCT.md and plan.json in /work/plan right away from what you know, then discuss.',
           '',
           `Owner: ${text}`,
         ].join('\n')
@@ -290,6 +338,45 @@ export async function planTurn(ctx: PipelineContext, id: number, text: string): 
   } catch (e) {
     addMessage(ctx, id, 'system', `Couldn't run the planner: ${redact((e as Error).message, readToken)}`);
     update(ctx, id, { state: 'drafting' });
+  }
+}
+
+// ---------- apply an issue conversation ----------
+
+/**
+ * Write the revised issue to GitHub. A parked task gets a fresh start with it; a queued one picks it up anyway; a
+ * running one sees it at its next step (the review reads the issue fresh). The conversation stays open for more.
+ */
+export async function applyIssuePlan(ctx: PipelineContext, deps: Pick<ExecuteDeps, 'repoClient'>, id: number): Promise<void> {
+  const plan = getPlan(ctx, id);
+  if (!plan || plan.focus !== 'issue' || !plan.projectId || !plan.issueNumber) throw new Error(`No issue conversation ${id}`);
+  if (!['drafting', 'failed'].includes(plan.state)) throw new Error(`The conversation is ${plan.state}`);
+  const files = readPlanFiles(ctx, plan);
+  if (!files.issue) throw new Error(files.errors.join(' ') || 'Nothing to apply');
+  const project = ctx.store.projects().find((p) => p.id === plan.projectId)!;
+  update(ctx, id, { state: 'executing' });
+  try {
+    const { gh } = await deps.repoClient(project);
+    await gh.updateIssue(project.owner, project.id, plan.issueNumber, { title: files.issue.title, body: files.issue.body });
+    await gh.comment(project.owner, project.id, plan.issueNumber, `_Revised with the planner on the factory dashboard (conversation ${id})._`);
+    const taskId = `${project.id}#${plan.issueNumber}`;
+    const task = ctx.store.task(taskId);
+    let note = 'No factory task tracks it yet; add the factory:ready label to have it built.';
+    if (task) {
+      ctx.store.db.prepare('UPDATE tasks SET title = ? WHERE id = ?').run(files.issue.title, taskId);
+      if (task.state === 'parked') {
+        ctx.store.transition(taskId, 'queued', { attempt: 0, fixRounds: 0, interruptions: 0, sessionId: null, lastFailure: null, pendingMode: 'build', notBefore: null });
+        note = 'The parked task starts over with it.';
+      } else if (task.state === 'queued') note = 'The queued task builds from it.';
+      else if (['done', 'cancelled'].includes(task.state)) note = `The task is ${task.state}; the change doesn't reopen it.`;
+      else note = 'The running task sees it from its next step; the review checks against it.';
+    }
+    update(ctx, id, { state: 'drafting' });
+    addMessage(ctx, id, 'system', `Applied to issue #${plan.issueNumber}. ${note}`);
+  } catch (e) {
+    update(ctx, id, { state: 'drafting' });
+    addMessage(ctx, id, 'system', `Couldn't apply: ${(e as Error).message}`);
+    throw e;
   }
 }
 

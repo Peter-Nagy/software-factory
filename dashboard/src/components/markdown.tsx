@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
 
 function inline(text: string, key: string): ReactNode[] {
   const out: ReactNode[] = []
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))/g
+  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))|(?<![\w*])[*_]([^*_\s][^*_]*?)[*_](?![\w*])/g
   let last = 0
   let m: RegExpExecArray | null
   let i = 0
@@ -14,6 +14,7 @@ function inline(text: string, key: string): ReactNode[] {
     const k = `${key}-${i++}`
     if (m[1]) out.push(<code key={k} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{m[1].slice(1, -1)}</code>)
     else if (m[2]) out.push(<strong key={k}>{m[2].slice(2, -2)}</strong>)
+    else if (m[6]) out.push(<em key={k}>{m[6]}</em>)
     else if (m[3]) out.push(<a key={k} href={m[5]} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-4 hover:underline">{m[4]}</a>)
     last = m.index + m[0].length
   }

@@ -11,8 +11,9 @@ import { parseFactoryConfig } from '../src/config.ts';
 import { dashboardToken, hostAllowed, startDashboard, type DashboardContext } from '../src/dashboard/server.ts';
 import { Store } from '../src/db.ts';
 import type { GitHub } from '../src/github.ts';
-import { createPlan, executePlan, getPlan, issueBody, issueLabels, planMessages, planTurn, readPlanFiles, topoOrder, validatePlan, type PlanFile } from '../src/plan.ts';
+import { applyIssuePlan, createPlan, executePlan, issuePlanFor, parseIssueFile, getPlan, issueBody, issueLabels, planMessages, planTurn, readPlanFiles, topoOrder, validatePlan, type PlanFile } from '../src/plan.ts';
 import { Secrets } from '../src/secrets.ts';
+import { taskFromIssue } from '../src/issues.ts';
 
 const planDocker = fileURLToPath(new URL('./fixtures/fake-docker-plan.sh', import.meta.url));
 chmodSync(planDocker, 0o755);
@@ -253,4 +254,54 @@ test('dashboard: project and task details, pausing a project', async () => {
   } finally {
     d.server.close();
   }
+});
+
+test('issue conversation: starts from the issue on GitHub, applies the revision, restarts a parked task', async () => {
+  const s = setup();
+  const origin = join(s.root, 'origin.git');
+  const seed = join(s.root, 'seed');
+  const g = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, stdio: 'pipe' });
+  g(s.root, 'init', '-q', '--bare', '-b', 'main', origin);
+  g(s.root, 'init', '-q', '-b', 'main', seed);
+  writeFileSync(join(seed, 'CLAUDE.md'), 'hi');
+  g(seed, 'add', '.');
+  g(seed, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init');
+  g(seed, 'push', '-q', origin, 'main');
+  s.ctx.remoteUrl = () => origin;
+  const updates: unknown[] = [];
+  const comments: string[] = [];
+  Object.assign(s.gh, {
+    issue: async () => ({ number: 7, title: 'Import CSV', body: 'Import habits.', state: 'open', html_url: 'u', labels: [] }),
+    updateIssue: async (_o: string, _r: string, n: number, p: unknown) => void updates.push({ n, ...(p as object) }),
+    comment: async (_o: string, _r: string, _n: number, b: string) => void comments.push(b),
+  });
+  s.store.upsertTask(taskFromIssue('app', 3, { number: 7, title: 'Import CSV', body: null, labels: [] }));
+  for (const to of ['building', 'parked'] as const) s.store.transition('app#7', to, to === 'building' ? { attempt: 3, branch: 'b' } : { lastFailure: 'CSV tests fail' });
+
+  assert.deepEqual(parseIssueFile('# Title here\n\nBody text long enough'), { title: 'Title here', body: 'Body text long enough' });
+  assert.equal(parseIssueFile('No heading\nbody body body'), null);
+  assert.throws(() => createPlan(s.ctx, { title: 'x', target: 'existing', projectId: 'app', focus: 'issue' }), /issue number/);
+
+  process.env.FACTORY_DOCKER_BIN = planDocker;
+  const plan = createPlan(s.ctx, { title: '#7', target: 'existing', projectId: 'app', focus: 'issue', issueNumber: 7 });
+  assert.equal(plan.model, 'sonnet');
+  assert.equal(issuePlanFor(s.ctx, 'app', 7)!.id, plan.id);
+  await planTurn(s.ctx, plan.id, 'Quoted newlines must work');
+  const dir = join(s.root, 'state/plans', String(plan.id));
+  assert.equal(readFileSync(join(dir, 'issue-seen'), 'utf8'), '# Import CSV\n\nImport habits.\n');
+  assert.match(readFileSync(join(dir, 'argsseen'), 'utf8'), /revise issue #7/);
+  const files = readPlanFiles(s.ctx, getPlan(s.ctx, plan.id)!);
+  assert.deepEqual(files.errors, []);
+  assert.equal(files.issue!.title, 'Import habits from CSV files');
+
+  await applyIssuePlan(s.ctx, { repoClient: async () => ({ gh: s.gh }) }, plan.id);
+  assert.deepEqual(updates, [{ n: 7, title: 'Import habits from CSV files', body: files.issue!.body }]);
+  assert.match(comments[0]!, /conversation/);
+  const t = s.store.task('app#7')!;
+  assert.equal(t.state, 'queued');
+  assert.equal(t.attempt, 0);
+  assert.equal(t.pendingMode, 'build');
+  assert.equal(t.title, 'Import habits from CSV files');
+  assert.equal(getPlan(s.ctx, plan.id)!.state, 'drafting'); // stays open for more rounds
+  assert.match(planMessages(s.ctx, plan.id).at(-1)!.text, /Applied to issue #7\. The parked task starts over/);
 });

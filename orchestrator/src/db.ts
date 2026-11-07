@@ -116,6 +116,8 @@ const MIGRATIONS: string[] = [
    );`,
   // v4: a plan's focus: a change (features, fixes) or the project's goals (docs/PRODUCT.md)
   `ALTER TABLE plans ADD COLUMN focus TEXT NOT NULL DEFAULT 'change';`,
+  // v5: conversations about one existing issue
+  `ALTER TABLE plans ADD COLUMN issue_number INTEGER;`,
 ];
 
 type Row = Record<string, unknown>;

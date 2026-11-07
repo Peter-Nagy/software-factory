@@ -1,46 +1,50 @@
-import { Archive, Plus } from "lucide-react"
+import { Archive, ChevronRight, Plus, Sparkles } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { NewPlanDialog } from "@/components/dialogs"
 import { PlanView } from "@/components/plan-view"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { PageHeader, ProjectAvatar } from "@/components/visual"
 import { api } from "@/lib/api"
 import { useFactory } from "@/lib/factory"
 import { ago } from "@/lib/format"
 import { Link, navigate } from "@/lib/router"
 
+const PLAN_STATE: Record<string, string> = {
+  drafting: "bg-violet-500/12 text-violet-700 dark:text-violet-300",
+  thinking: "bg-sky-500/12 text-sky-700 dark:text-sky-300",
+  executing: "bg-sky-500/12 text-sky-700 dark:text-sky-300",
+  executed: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+  failed: "bg-rose-500/12 text-rose-700 dark:text-rose-300",
+}
+
 export function PlansPage() {
   const { state } = useFactory()
   const [open, setOpen] = useState(false)
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold">Plans</h1>
-        <Button size="sm" className="ml-auto" onClick={() => setOpen(true)}><Plus /> New plan</Button>
-      </div>
-      <Card>
-        <CardContent className="p-0">
-          {state.plans.length === 0 ? (
-            <p className="p-6 text-sm text-muted-foreground">No plans yet. Start one: describe an idea, discuss it with the planner, then press Execute.</p>
-          ) : (
-            <ul className="divide-y">
-              {state.plans.map((p) => (
-                <li key={p.id}>
-                  <Link href={`/plans/${p.id}`} className="flex flex-wrap items-center gap-2 px-4 py-3 text-sm hover:bg-muted/50">
-                    <span className="font-medium">{p.title}</span>
-                    <span className="text-muted-foreground">{p.target === "new" ? "new project" : p.projectId}</span>
-                    {p.focus === "goals" && <Badge variant="secondary" className="h-4.5 text-[10px]">goals</Badge>}
-                    <Badge variant="outline" className="ml-auto">{p.state}</Badge>
-                    <span className="w-20 text-right text-xs text-muted-foreground">{ago(p.updatedAt)}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+    <div className="space-y-6">
+      <PageHeader title="Plans" eyebrow="Talk an idea through with the planner, then execute it" actions={<Button onClick={() => setOpen(true)}><Plus /> New plan</Button>} />
+      {state.plans.length === 0 ? (
+        <div className="rounded-3xl border border-dashed p-12 text-center text-sm text-muted-foreground">No plans yet. Describe an idea, discuss it with the planner, then press Execute.</div>
+      ) : (
+        <div className="overflow-hidden rounded-3xl border bg-card shadow-elevation">
+          <ul className="divide-y">
+            {state.plans.map((p) => (
+              <li key={p.id}>
+                <Link href={`/plans/${p.id}`} className="flex items-center gap-3.5 px-4 py-3.5 text-sm transition-colors hover:bg-muted/50 sm:px-5">
+                  {p.projectId ? <ProjectAvatar id={p.projectId} /> : <span className="bg-hero inline-flex size-9 shrink-0 items-center justify-center rounded-xl text-white"><Sparkles className="size-4" /></span>}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">{p.title}</p>
+                    <p className="truncate text-xs text-muted-foreground">{p.target === "new" ? "New project" : p.projectId}{p.focus === "goals" ? " · goals" : ""} · {ago(p.updatedAt)}</p>
+                  </div>
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${PLAN_STATE[p.state] ?? "bg-muted text-muted-foreground"}`}>{p.state}</span>
+                  <ChevronRight className="size-4 text-muted-foreground" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <NewPlanDialog open={open} onOpenChange={setOpen} projects={state.projects} />
     </div>
   )
@@ -60,25 +64,19 @@ export function PlanPage({ id }: { id: number }) {
     }
   }
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div>
-          <p className="text-xs text-muted-foreground">
-            <Link href="/plans" className="hover:underline">Plans</Link>
-            {plan?.projectId && <> · <Link href={`/projects/${encodeURIComponent(plan.projectId)}`} className="hover:underline">{plan.projectId}</Link></>}
-          </p>
-          <h1 className="text-lg font-semibold">{plan?.title ?? `Plan ${id}`}</h1>
-        </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow={<><Link href="/plans" className="hover:text-foreground">Plans</Link>{plan?.projectId && <> · <Link href={`/projects/${encodeURIComponent(plan.projectId)}`} className="hover:text-foreground">{plan.projectId}</Link></>}</>}
+        title={plan?.title ?? `Plan ${id}`}
+        actions={plan && !["executed", "executing", "thinking"].includes(plan.state) ? <Button variant="outline" size="sm" onClick={archive}><Archive /> Archive</Button> : undefined}
+      >
         {plan && (
-          <div className="flex gap-1.5">
-            <Badge variant="secondary">{plan.target === "new" ? "new project" : plan.focus === "goals" ? "goals" : "change"}</Badge>
-            <Badge variant="outline">{plan.state}</Badge>
+          <div className="mt-2 flex gap-1.5">
+            <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">{plan.target === "new" ? "New project" : plan.focus === "goals" ? "Goals" : "Change"}</span>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${PLAN_STATE[plan.state] ?? "bg-muted text-muted-foreground"}`}>{plan.state}</span>
           </div>
         )}
-        {plan && !["executed", "executing", "thinking"].includes(plan.state) && (
-          <Button variant="ghost" size="sm" className="ml-auto" onClick={archive}><Archive /> Archive</Button>
-        )}
-      </div>
+      </PageHeader>
       <PlanView planId={id} owner={state.owner} onChanged={reload} />
     </div>
   )

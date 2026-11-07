@@ -31,3 +31,10 @@ export const COLUMNS: { key: string; title: string; states: TaskState[]; hint: s
 export const repoUrl = (owner: string, repo: string) => `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
 export const issueUrl = (owner: string, t: Pick<Task, "projectId" | "issueNumber">) => `${repoUrl(owner, t.projectId)}/issues/${t.issueNumber}`
 export const prUrl = (owner: string, t: Pick<Task, "projectId" | "prNumber">) => (t.prNumber ? `${repoUrl(owner, t.projectId)}/pull/${t.prNumber}` : null)
+export const issuePath = (t: Pick<Task, "projectId" | "issueNumber">) => `/projects/${encodeURIComponent(t.projectId)}/issues/${t.issueNumber}`
+
+/** "Good morning" etc. in the factory's time zone. */
+export function greeting(timezone?: string): string {
+  const h = Number(new Date().toLocaleString("en-GB", { timeZone: timezone, hour: "2-digit", hour12: false }))
+  return h < 5 ? "Working late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"
+}

@@ -182,6 +182,14 @@ export class GitHub {
     return parts.join('\n\n').slice(0, 20_000);
   }
 
+  issue(owner: string, repo: string, n: number) {
+    return this.request<{ number: number; title: string; body: string | null; state: string; html_url: string; labels: { name: string }[] }>('GET', `/repos/${owner}/${repo}/issues/${n}`);
+  }
+
+  updateIssue(owner: string, repo: string, n: number, p: { title?: string; body?: string }) {
+    return this.request<{ number: number }>('PATCH', `/repos/${owner}/${repo}/issues/${n}`, p);
+  }
+
   pullRequest(owner: string, repo: string, prNumber: number) {
     return this.request<{ number: number; state: string; merged: boolean; body: string | null; head: { sha: string; ref: string }; base: { ref: string } }>(
       'GET',

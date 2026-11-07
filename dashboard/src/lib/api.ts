@@ -11,12 +11,12 @@ export interface Task {
 }
 export interface Usage { fiveHourPct: number | null; fiveHourResetsAt: number | null; sevenDayPct: number | null; sevenDayResetsAt: number | null; source: string; takenAt: number }
 export interface Question { id: number; kind: "product" | "migration"; taskId: string | null; projectId: string | null; question: string; options: string[]; defaultOption: string | null; askedAt: number; timeoutAt: number }
-export interface Plan { id: number; title: string; target: "new" | "existing"; focus: "change" | "goals"; projectId: string | null; state: "drafting" | "thinking" | "executing" | "executed" | "failed" | "archived"; model: Model; result: { repoCreated?: string; trackingIssue?: number; issues: Record<string, number>; error?: string } | null; createdAt: number; updatedAt: number }
+export interface Plan { id: number; title: string; target: "new" | "existing"; focus: "change" | "goals" | "issue"; projectId: string | null; issueNumber: number | null; state: "drafting" | "thinking" | "executing" | "executed" | "failed" | "archived"; model: Model; result: { repoCreated?: string; trackingIssue?: number; issues: Record<string, number>; error?: string } | null; createdAt: number; updatedAt: number }
 export interface PlanIssue { key: string; title: string; body: string; size: "s" | "m" | "l"; risk: "low" | "medium" | "high"; area?: string; dependsOn: string[] }
 export interface PlanDetail {
   plan: Plan
   messages: { id: number; role: "owner" | "planner" | "system"; text: string; at: number }[]
-  files: { product: string | null; plan: { title: string; project?: { name: string; kind: string; priority: number }; issues: PlanIssue[] } | null; errors: string[] }
+  files: { product: string | null; plan: { title: string; project?: { name: string; kind: string; priority: number }; issues: PlanIssue[] } | null; issue?: { title: string; body: string } | null; errors: string[] }
   busy: boolean
 }
 export interface Run { id: number; task_id: string | null; role: string; model: string; started_at: number; finished_at: number | null; ok: number | null; cost_usd: number | null; num_turns: number | null; summary: string | null }
@@ -29,6 +29,18 @@ export interface FactoryState {
 }
 export interface ProjectDetail { project: Project; tasks: Task[]; product: string | null; plans: Plan[]; questions: Question[]; merged30d: number }
 export interface TaskDetail { task: Task; runs: Run[]; events: { at: number; kind: string; data: string }[]; questions: { id: number; kind: string; question: string; answer: string | null; answered_by: string | null; asked_at: number }[] }
+
+export interface IssueDetail {
+  project: Project
+  number: number
+  issue: { title: string; body: string; state: string; url: string; labels: string[] } | null
+  issueError: string | null
+  task: Task | null
+  runs: Run[]
+  events: { at: number; kind: string; data: string }[]
+  questions: TaskDetail["questions"]
+  conversation: { id: number; state: Plan["state"] } | null
+}
 
 export class ApiError extends Error {}
 

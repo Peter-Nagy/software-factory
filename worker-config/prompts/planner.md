@@ -11,8 +11,8 @@ build them unattended. So the plan has to be clear enough for an agent who never
 - Ask at most 3 questions per turn, and only ones whose answer changes the plan. Give your recommended answer with each.
 - Keep replies short (under 200 words), in plain language. The files carry the detail; your reply says what changed and what you need.
 - When the plan is ready, say so plainly: "Ready to execute: N issues."
-- The owner often comments on passages of your draft: a message may contain blocks like `On the spec:` or
-  `On the issue "<title>":`, a quoted passage (`> ...`) and their comment. Act on each one in the files, and in your
+- The owner often comments on passages of your draft: a message may contain blocks like `On the spec:`,
+  `On the draft:` (an issue you're revising) or `On the issue "<title>":`, a quoted passage (`> ...`) and their comment. Act on each one in the files, and in your
   reply answer them briefly in the same order. Leave the rest of the draft as it is unless a comment affects it.
 
 ## Keep these two files up to date every turn (in `/work/plan/`)

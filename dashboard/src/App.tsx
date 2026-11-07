@@ -1,6 +1,5 @@
-import { Factory, Pause, Play } from "lucide-react"
+import { Activity, Factory, FolderKanban, LayoutGrid, Pause, Play, Sparkles } from "lucide-react"
 import { toast } from "sonner"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -15,12 +14,13 @@ import { BoardPage } from "@/pages/board-page"
 import { ProjectPage } from "@/pages/project-page"
 import { ProjectsPage } from "@/pages/projects-page"
 import { PlanPage, PlansPage } from "@/pages/plans-page"
+import { IssuePage } from "@/pages/issue-page"
 
 const NAV = [
-  { href: "/", label: "Board" },
-  { href: "/projects", label: "Projects" },
-  { href: "/plans", label: "Plans" },
-  { href: "/activity", label: "Activity" },
+  { href: "/", label: "Board", icon: LayoutGrid },
+  { href: "/projects", label: "Projects", icon: FolderKanban },
+  { href: "/plans", label: "Plans", icon: Sparkles },
+  { href: "/activity", label: "Activity", icon: Activity },
 ]
 
 function PauseControl({ state, reload }: { state: FactoryState; reload: () => Promise<void> }) {
@@ -35,14 +35,14 @@ function PauseControl({ state, reload }: { state: FactoryState; reload: () => Pr
   }
   if (state.pausedUntil) {
     return (
-      <Button size="sm" variant="outline" onClick={() => run("resume", undefined, "Resumed")}>
+      <Button size="sm" variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-300" onClick={() => run("resume", undefined, "Resumed")}>
         <Play /> <span className="hidden sm:inline">Paused until {when(state.pausedUntil, state.timezone)} ·</span> Resume
       </Button>
     )
   }
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button size="sm" variant="ghost" />}>
+      <DropdownMenuTrigger render={<Button size="sm" variant="outline" />}>
         <Pause /> <span className="hidden sm:inline">Pause</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
@@ -66,6 +66,7 @@ export default function App() {
   if (path === "/") page = <BoardPage />
   else if (path === "/projects") page = <ProjectsPage />
   else if ((params = match("/projects/:id", path))) page = <ProjectPage key={params.id} id={params.id!} />
+  else if ((params = match("/projects/:id/issues/:n", path))) page = <IssuePage key={path} projectId={params.id!} number={Number(params.n)} />
   else if (path === "/plans") page = <PlansPage />
   else if ((params = match("/plans/:id", path))) page = <PlanPage key={params.id} id={Number(params.id)} />
   else if (path === "/activity") page = <ActivityPage />
@@ -73,33 +74,59 @@ export default function App() {
 
   const active = (href: string) => (href === "/" ? path === "/" : path === href || path.startsWith(`${href}/`))
 
+  const badge = (n: number) => (
+    <span className="ml-1.5 inline-flex h-4.5 min-w-4.5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white tabular-nums">{n}</span>
+  )
+
   return (
-    <div className="min-h-dvh bg-background pb-[env(safe-area-inset-bottom)]">
-      <header className="sticky top-0 z-30 border-b bg-background/85 pt-[env(safe-area-inset-top)] backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-[1500px] items-center gap-2 px-4 sm:gap-4 sm:px-6">
-          <Link href="/" className="flex items-center gap-2 font-semibold">
-            <Factory className="size-5" />
-            <span className="hidden sm:inline">Software Factory</span>
+    <div className="min-h-dvh pb-[calc(env(safe-area-inset-bottom)+5rem)] sm:pb-[env(safe-area-inset-bottom)]">
+      <header className="glass sticky top-0 z-30 border-b border-border/60 pt-[env(safe-area-inset-top)]">
+        <div className="mx-auto flex h-16 max-w-[1500px] items-center gap-3 px-4 sm:px-6">
+          <Link href="/" className="flex items-center gap-2.5 font-semibold tracking-tight">
+            <span className="bg-hero inline-flex size-8 items-center justify-center rounded-xl text-white shadow-[0_6px_16px_-6px_var(--primary)]">
+              <Factory className="size-4.5" />
+            </span>
+            <span className="text-[1.05rem]">Factory</span>
           </Link>
-          <nav className="flex gap-0.5">
+          <nav className="mx-auto hidden items-center gap-1 rounded-full bg-muted/70 p-1 sm:flex">
             {NAV.map((n) => (
               <Link key={n.href} href={n.href}
-                className={cn("inline-flex items-center rounded-md px-2 py-1.5 text-sm whitespace-nowrap transition-colors sm:px-2.5", active(n.href) ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground")}>
+                className={cn("inline-flex h-8 items-center rounded-full px-4 text-sm font-medium whitespace-nowrap transition-all", active(n.href) ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
                 {n.label}
-                {n.href === "/" && needsYou > 0 && <Badge className="ml-1.5 h-4.5 bg-amber-500 px-1.5 text-[10px] text-white">{needsYou}</Badge>}
+                {n.href === "/" && needsYou > 0 && badge(needsYou)}
               </Link>
             ))}
           </nav>
-          <div className="ml-auto">{state && <PauseControl state={state} reload={reload} />}</div>
+          <div className="ml-auto sm:ml-0">{state && <PauseControl state={state} reload={reload} />}</div>
         </div>
       </header>
-      <main className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6">
+      <main className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 sm:py-8">
         {!state ? (
-          error ? <p className="text-sm text-muted-foreground">Can't reach the factory: {error}</p> : <div className="space-y-4"><Skeleton className="h-40 w-full" /><Skeleton className="h-96 w-full" /></div>
+          error ? <p className="text-sm text-muted-foreground">Can't reach the factory: {error}</p> : <div className="space-y-4"><Skeleton className="h-48 w-full rounded-3xl" /><Skeleton className="h-96 w-full rounded-3xl" /></div>
         ) : (
-          <FactoryContext.Provider value={{ state, reload }}>{page}</FactoryContext.Provider>
+          <FactoryContext.Provider value={{ state, reload }}>
+            <div key={path} className="animate-rise">{page}</div>
+          </FactoryContext.Provider>
         )}
       </main>
+      {/* Phones: an app-style tab bar */}
+      <nav className="glass fixed inset-x-0 bottom-0 z-30 border-t border-border/60 pb-[env(safe-area-inset-bottom)] sm:hidden">
+        <div className="grid grid-cols-4">
+          {NAV.map((n) => {
+            const Icon = n.icon
+            const on = active(n.href)
+            return (
+              <Link key={n.href} href={n.href} className={cn("relative flex flex-col items-center gap-1 pt-2.5 pb-2 text-[11px] font-medium", on ? "text-primary" : "text-muted-foreground")}>
+                <span className={cn("inline-flex h-7 w-12 items-center justify-center rounded-full transition-colors", on && "bg-primary/12")}>
+                  <Icon className="size-5" />
+                </span>
+                {n.label}
+                {n.href === "/" && needsYou > 0 && <span className="absolute top-1.5 left-1/2 ml-2 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">{needsYou}</span>}
+              </Link>
+            )
+          })}
+        </div>
+      </nav>
     </div>
   )
 }

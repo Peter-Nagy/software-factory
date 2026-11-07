@@ -11,6 +11,13 @@ done
 echo "$*" > "$WORK/../argsseen"
 [ -n "$REPO_MOUNT" ] && ls "$REPO_MOUNT" > "$WORK/../repo-files"
 mkdir -p "$WORK/plan"
+if [ -f "$WORK/plan/ISSUE.md" ]; then # an issue conversation: revise the issue only
+  cp "$WORK/plan/ISSUE.md" "$WORK/../issue-seen"
+  printf '# Import habits from CSV files\n\nImport habits from a CSV export.\n\n## Acceptance criteria\n- [ ] Quoted fields with newlines parse\n' > "$WORK/plan/ISSUE.md"
+  echo '{"type":"system","subtype":"init","session_id":"plan-sess"}'
+  echo '{"type":"result","subtype":"success","is_error":false,"session_id":"plan-sess","result":"Tightened the criteria.","num_turns":2}'
+  exit 0
+fi
 printf '# Habit tracker\n\nTrack daily habits and streaks.\n\n## Stories\n- [ ] Add a habit\n' > "$WORK/plan/PRODUCT.md"
 cat > "$WORK/plan/plan.json" <<'JSON'
 {"title":"Habit tracker v1","project":{"name":"habit-tracker","kind":"web-app","priority":4},

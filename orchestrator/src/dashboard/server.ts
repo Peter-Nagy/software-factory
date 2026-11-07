@@ -8,8 +8,10 @@ import { weeklyBurnLine } from '../governor.ts';
 import { ORCHESTRATOR_PERMISSIONS, type GitHub, type RepoPermissions } from '../github.ts';
 import type { PipelineContext } from '../pipeline.ts';
 import {
+  applyIssuePlan,
   appRepoClient,
   archivePlan,
+  issuePlanFor,
   createPlan,
   executePlan,
   getPlan,
@@ -133,7 +135,7 @@ export function dashboardState(ctx: DashboardContext) {
     projects: store.projects(),
     tasks: [...store.openTasks(), ...recentDone].filter((t) => !TERMINAL_STATES.includes(t.state) || recentDone.includes(t)),
     questions: openQuestions(ctx),
-    plans: listPlans(ctx),
+    plans: listPlans(ctx).filter((pl) => pl.focus !== 'issue'), // issue conversations live on their issue's page
     runs,
     spend,
     events,
@@ -168,6 +170,25 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
     } catch {
       return hit?.text ?? null;
     }
+  };
+
+  // Issues as GitHub has them, cached briefly: the issue page polls.
+  const issueCache = new Map<string, { at: number; issue: Awaited<ReturnType<GitHub['issue']>> }>();
+  const issueFor = async (project: Project, n: number, fresh = false) => {
+    const k = `${project.id}#${n}`;
+    const hit = issueCache.get(k);
+    if (hit && !fresh && ctx.now() - hit.at < 30) return hit.issue;
+    const { gh } = await ctx.repoClient(project, { issues: 'read', metadata: 'read' });
+    const issue = await gh.issue(project.owner, project.id, n);
+    issueCache.set(k, { at: ctx.now(), issue });
+    return issue;
+  };
+  /** "project#n" -> the project and the issue number. */
+  const issueRef = (ref: string) => {
+    const m = ref.match(/^(.+)#(\d+)$/);
+    const project = m ? ctx.store.projects().find((x) => x.id === m[1]) : undefined;
+    if (!m || !project) throw new HttpError(404, `No issue ${ref}`);
+    return { project, n: Number(m[2]) };
   };
 
   const runInBackground = (planId: number, work: () => Promise<unknown>) => {
@@ -276,7 +297,7 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
           project,
           tasks,
           product: await productFor(project),
-          plans: listPlans(ctx).filter((pl) => pl.projectId === id),
+          plans: listPlans(ctx).filter((pl) => pl.projectId === id && pl.focus !== 'issue'),
           questions: openQuestions(ctx).filter((q) => q.projectId === id),
           merged30d: Number((store.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND state = 'done' AND updated_at >= ?`).get(id, ctx.now() - 30 * 86400) as { n: number }).n),
         };
@@ -298,6 +319,41 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
           events: store.db.prepare('SELECT at, kind, data FROM events WHERE task_id = ? ORDER BY id DESC LIMIT 50').all(id),
           questions: store.db.prepare('SELECT id, kind, question, answer, answered_by, asked_at FROM questions WHERE task_id = ? ORDER BY id DESC').all(id),
         };
+      }
+      case 'GET issues/:id': {
+        const { project, n } = issueRef(id);
+        const task = store.task(`${project.id}#${n}`);
+        let issue = null;
+        let issueError: string | null = null;
+        try {
+          issue = await issueFor(project, n);
+        } catch (e) {
+          issueError = (e as Error).message;
+        }
+        const conversation = issuePlanFor(ctx, project.id, n);
+        const tid = `${project.id}#${n}`;
+        return {
+          project,
+          number: n,
+          issue: issue && { title: issue.title, body: issue.body ?? '', state: issue.state, url: issue.html_url, labels: issue.labels.map((l) => l.name) },
+          issueError,
+          task,
+          runs: task ? store.db.prepare('SELECT id, role, model, started_at, finished_at, ok, cost_usd, num_turns, summary FROM runs WHERE task_id = ? ORDER BY id DESC LIMIT 30').all(tid) : [],
+          events: task ? store.db.prepare('SELECT at, kind, data FROM events WHERE task_id = ? ORDER BY id DESC LIMIT 50').all(tid) : [],
+          questions: task ? store.db.prepare('SELECT id, kind, question, answer, answered_by, asked_at FROM questions WHERE task_id = ? ORDER BY id DESC').all(tid) : [],
+          conversation: conversation && { id: conversation.id, state: conversation.state },
+        };
+      }
+      case 'POST issues/:id/conversation': {
+        const { project, n } = issueRef(id);
+        const existing = issuePlanFor(ctx, project.id, n);
+        const plan = existing ?? createPlan(ctx, {
+          title: `#${n}: ${(await issueFor(project, n).catch(() => null))?.title ?? 'issue'}`, target: 'existing', projectId: project.id, focus: 'issue', issueNumber: n,
+          model: body.model === 'opus' ? 'opus' : 'sonnet',
+        });
+        const first = typeof body.message === 'string' && body.message.trim() ? body.message.trim() : null;
+        if (first) runInBackground(plan.id, () => planTurn(ctx, plan.id, first.slice(0, 20_000)));
+        return getPlan(ctx, plan.id);
       }
       case 'POST projects/:id/tasks': {
         const project = store.projects().find((x) => x.id === id);
@@ -327,6 +383,7 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
         const plan = getPlan(ctx, Number(id));
         if (!plan) throw new HttpError(404, `No plan ${id}`);
         if (plan.state === 'executed' || plan.state === 'archived') throw new HttpError(400, 'This plan is finished; start a new one');
+        if (plan.state === 'executing') throw new HttpError(409, 'Wait until it has been applied');
         const text = str(body.text, 'text');
         runInBackground(plan.id, () => planTurn(ctx, plan.id, text));
         return;
@@ -338,6 +395,14 @@ export function startDashboard(ctx: DashboardContext, opts: DashboardOptions): P
       case 'POST plans/:id/execute': {
         const plan = getPlan(ctx, Number(id));
         if (!plan) throw new HttpError(404, `No plan ${id}`);
+        if (plan.focus === 'issue') {
+          const deps = { repoClient: appRepoClient((pr, perms) => ctx.repoClient(pr, perms)) };
+          runInBackground(plan.id, async () => {
+            await applyIssuePlan(ctx, deps, plan.id);
+            issueCache.delete(`${plan.projectId}#${plan.issueNumber}`);
+          });
+          return;
+        }
         const files = readPlanFiles(ctx, plan);
         if (!files.plan || files.errors.length) throw new HttpError(400, `Not ready: ${files.errors.join(' ')}`);
         runInBackground(plan.id, () => executePlan(ctx, { createRepo: opts.createRepo, repoClient: appRepoClient((pr, perms) => ctx.repoClient(pr, perms)) }, plan.id));
