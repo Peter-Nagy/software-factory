@@ -24,6 +24,15 @@ const ROLE: Record<string, { icon: typeof Bot; tone: string }> = {
   planner: { icon: Sparkles, tone: "bg-fuchsia-500/12 text-fuchsia-600 dark:text-fuchsia-300" },
 }
 
+/** "studio:1:brief:standin" → "Studio 1 · brief (stand-in)"; "plan:3" → "Plan 3"; a task id stays as it is. */
+function subjectLabel(subject: string | null | undefined): string {
+  if (!subject) return "—"
+  const [kind, id, phase, extra] = subject.split(":")
+  if (kind === "studio") return `Studio ${id} · ${phase ?? ""}${extra === "standin" ? " (stand-in)" : ""}`
+  if (kind === "plan") return `Plan ${id}`
+  return subject
+}
+
 const taskHref = (id: string) => {
   const [p, n] = id.split("#")
   return `/projects/${encodeURIComponent(p!)}/issues/${n}`
@@ -50,7 +59,7 @@ export function ActivityPage() {
                     <span className={cn("inline-flex size-10 shrink-0 items-center justify-center rounded-full", role.tone)}><Icon className="size-4.5" /></span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium capitalize">{r.role} <span className="font-normal text-muted-foreground normal-case">· {r.model}</span></p>
-                      <p className="truncate text-xs text-muted-foreground">{r.task_id ?? "plan"} · {when(r.started_at, state.timezone)}{r.summary ? ` · ${r.summary}` : ""}</p>
+                      <p className="truncate text-xs text-muted-foreground">{subjectLabel(r.subject ?? r.task_id)} · {when(r.started_at, state.timezone)}{r.summary ? ` · ${r.summary}` : ""}</p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className={cn("font-medium tabular-nums", r.ok === 0 && "text-rose-600 dark:text-rose-300")}>{r.cost_usd != null ? `$${r.cost_usd.toFixed(2)}` : "–"}</p>

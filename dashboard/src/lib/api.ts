@@ -19,7 +19,7 @@ export interface PlanDetail {
   files: { product: string | null; plan: { title: string; project?: { name: string; kind: string; priority: number }; issues: PlanIssue[] } | null; issue?: { title: string; body: string } | null; errors: string[] }
   busy: boolean
 }
-export interface Run { id: number; task_id: string | null; role: string; model: string; started_at: number; finished_at: number | null; ok: number | null; cost_usd: number | null; num_turns: number | null; summary: string | null }
+export interface Run { id: number; task_id: string | null; subject?: string | null; role: string; model: string; started_at: number; finished_at: number | null; ok: number | null; cost_usd: number | null; num_turns: number | null; summary: string | null }
 export interface FactoryState {
   now: number; owner: string; timezone: string; usage: Usage | null; burnLine: number | null
   governor: { opusMaxFiveHourPct: number; anyMaxFiveHourPct: number }; pausedUntil: number | null

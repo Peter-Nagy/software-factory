@@ -163,7 +163,7 @@ export function dashboardState(ctx: DashboardContext) {
     .all()
     .map((r) => store.task(String((r as { id: string }).id))!);
   const runs = store.db
-    .prepare('SELECT id, task_id, role, model, started_at, finished_at, ok, cost_usd, num_turns, summary FROM runs ORDER BY id DESC LIMIT 25')
+    .prepare('SELECT id, task_id, subject, role, model, started_at, finished_at, ok, cost_usd, num_turns, summary FROM runs ORDER BY id DESC LIMIT 25')
     .all();
   const spend = store.db
     .prepare(`SELECT role, model, COUNT(*) AS runs, ROUND(SUM(COALESCE(cost_usd, 0)), 3) AS usd FROM runs WHERE started_at >= ? GROUP BY role, model ORDER BY usd DESC`)
