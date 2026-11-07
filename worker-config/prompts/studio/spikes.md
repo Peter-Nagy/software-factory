@@ -9,3 +9,5 @@ facts. For each spike:
 - In SPIKES.md, per spike: the question, the answer (yes / no / partly), the evidence, and what it means for the plan
   (an approach to use, a constraint, or a change to the architecture).
 Spike code is thrown away; only the findings matter. Keep each spike under ~30 minutes of work.
+
+Interview: none, unless a spike result forces a product decision; then ask it as one concrete multiple-choice question.

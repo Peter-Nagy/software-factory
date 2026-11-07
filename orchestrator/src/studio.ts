@@ -79,9 +79,29 @@ export interface StudioMessage {
 }
 
 /** What each phase agent writes to /work/status/<phase>.json at the end of every turn. */
+const OptionSchema = z.union([
+  z.string().min(1).transform((label) => ({ label, description: '' })),
+  z.object({ label: z.string().min(1).max(120), description: z.string().max(400).default('') }),
+]);
+/** One interview question. A plain string is a free-text question. */
+export const StudioQuestionSchema = z.union([
+  z.string().min(1).transform((question) => ({ question, header: '', why: '', options: [], multiSelect: false, recommended: null })),
+  z.object({
+    question: z.string().min(1).max(600),
+    header: z.string().max(40).default(''),
+    why: z.string().max(400).default(''),
+    options: z.array(OptionSchema).max(6).default([]),
+    multiSelect: z.boolean().default(false),
+    recommended: z.string().nullable().default(null),
+  }),
+]);
+export type StudioQuestion = z.infer<typeof StudioQuestionSchema>;
+
 export const PhaseStatusSchema = z.object({
   ready: z.boolean(),
-  questions: z.array(z.string()).default([]),
+  questions: z.array(StudioQuestionSchema).max(15).default([]),
+  /** The interview's topics and whether each is settled, so the owner sees how far along it is. */
+  coverage: z.array(z.object({ topic: z.string().min(1).max(80), done: z.boolean() })).max(20).default([]),
   summary: z.string().default(''),
   verdict: z.enum(['build', 'narrow', 'dont']).optional(), // research only
 });
@@ -273,7 +293,7 @@ export function autopilotAfterTurn(ctx: Ctx, id: number, phase: PhaseKey): 'cont
   if (studio.mode !== 'autopilot' || phase === 'plan') return 'stopped';
   const status = readStatus(ctx, id, phase);
   if (!status?.ready || status.questions.length) {
-    addMessage(ctx, id, phase, 'system', status?.questions.length ? 'Autopilot paused: the agent needs your answers above.' : 'Autopilot paused: the agent didn\'t mark this phase done.');
+    addMessage(ctx, id, phase, 'system', status?.questions.length ? 'Autopilot paused: the agent has questions for you.' : 'Autopilot paused: the agent didn\'t mark this phase done.');
     return 'stopped';
   }
   if (phase === 'research' && status.verdict !== 'build') {
@@ -331,17 +351,22 @@ async function phaseTurn(ctx: PipelineContext, studio: Studio, row: PhaseRow, te
   setPhase(ctx, id, row.phase, { state: 'thinking', note: null });
   try {
     const first = row.sessionId === null;
+    // The owner can switch modes between turns, so every turn says which one applies.
+    const mode = studio.mode === 'autopilot'
+      ? '[Mode: autopilot. Don\'t interview: decide sensibly and record each decision; ask only what truly blocks you.]'
+      : '[Mode: guided. Interview the owner (see "Interviewing") until every specific your document needs is settled.]';
     const prompt = first
       ? [
           `Studio: "${studio.title}". You own the ${def.title} phase. Your document: /work/${def.doc}.`,
           'Earlier phases\' approved documents are in /work/docs; read the ones that exist before writing.',
-          `At the end of every turn write /work/status/${row.phase}.json: {"ready": true|false, "questions": [...], "summary": "one line"${row.phase === 'research' ? ', "verdict": "build"|"narrow"|"dont"' : ''}}.`,
+          `At the end of every turn write /work/status/${row.phase}.json: {"ready": true|false, "questions": [...], "coverage": [...], "summary": "one line"${row.phase === 'research' ? ', "verdict": "build"|"narrow"|"dont"' : ''}} (format in your instructions).`,
           '',
           phaseBrief(ctx, row.phase),
           '',
+          mode,
           `Owner: ${text}`,
         ].join('\n')
-      : text;
+      : `${mode}\n\n${text}`;
     const role = roleConfig(config, 'studio');
     const env = { [config.worker.claudeTokenEnv]: await ctx.secrets.get(config.worker.claudeTokenEnv) };
     const args = buildClaudeArgs({

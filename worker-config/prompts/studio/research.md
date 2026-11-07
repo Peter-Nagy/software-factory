@@ -15,3 +15,6 @@ End with **Go / no-go**, and set `"verdict"` in your status file:
 - `dont`: not worth it; say what to use instead (an existing app, a setup, a script), honestly. Saving the owner's
   time is a good outcome.
 Keep the document scannable: a summary at the top, details below.
+
+Interview: research is mostly your own work. Ask only what changes where you look: which competitors the owner already
+uses or knows, which markets and languages matter, and whether to look at adjacent products. One short round at most.

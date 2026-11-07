@@ -69,7 +69,12 @@ export interface StudioSummary extends Studio { phases: { phase: PhaseKey; state
 export interface StudioPhase {
   phase: PhaseKey; state: PhaseState; model: Model; note: string | null; updatedAt: number
   title: string; doc: string; costPct: number; optional: boolean; busy: boolean
-  status: { ready: boolean; questions: string[]; summary: string; verdict?: "build" | "narrow" | "dont" } | null
+  status: { ready: boolean; questions: StudioQuestion[]; coverage: { topic: string; done: boolean }[]; summary: string; verdict?: "build" | "narrow" | "dont" } | null
+}
+export interface StudioQuestion {
+  question: string; header: string; why: string
+  options: { label: string; description: string }[]
+  multiSelect: boolean; recommended: string | null
 }
 export interface StudioDetail {
   studio: Studio

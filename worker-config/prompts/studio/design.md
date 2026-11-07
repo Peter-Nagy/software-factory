@@ -12,3 +12,8 @@ Design the experience from the product document.
   scripts and network off). Size them for the device (390x844 for a phone; use a `<meta name="viewport">`), and use
   inline SVG for icons and charts. Add an `index.md`-style list of the screens with one line each in DESIGN.md.
 Builders will match these mockups, so make them the real target, not sketches.
+
+Interview coverage topics: name, personality and tone, visual references (apps and sites they like), colour and
+light/dark preferences, density (glanceable vs detailed), the home screen's job, key interactions (e.g. one-tap start),
+accessibility needs. Offer concrete alternatives as options ("Calm and minimal like Things", "Bold and sporty like
+Nike Run Club") rather than abstract questions. After the first mockups, ask a round on what to change.

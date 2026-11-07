@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stands in for a Studio phase agent. Writes the phase's document and status file into the mounted /work.
-# Per-phase behaviour from <work>/../mode-<phase>: "questions" (asks, not ready), "narrow" / "dont" (research verdict),
+# Per-phase behaviour from <work>/../mode-<phase>: "questions" (asks, not ready), "interview" (structured questions), "narrow" / "dont" (research verdict),
 # "spikes" (architecture names a spike), "fail" (agent error). Default: done, ready.
 set -euo pipefail
 [ "${1:-}" = "kill" ] && exit 0
@@ -35,6 +35,7 @@ case "$PHASE" in
 esac
 case "$MODE" in
   questions) echo '{"ready": false, "questions": ["Which platform?"], "summary": "need input"}' > "$WORK/status/$PHASE.json" ;;
+  interview) echo '{"ready": false, "summary": "asking", "coverage": [{"topic": "Who", "done": true}, {"topic": "Platforms", "done": false}], "questions": [{"header": "Platform", "question": "Which platforms?", "options": [{"label": "iPhone", "description": "Fastest"}, {"label": "Web"}], "recommended": "iPhone"}, "Describe your typical run"]}' > "$WORK/status/$PHASE.json" ;;
   narrow) echo '{"ready": true, "questions": [], "summary": "sharper angle", "verdict": "narrow"}' > "$WORK/status/$PHASE.json" ;;
   dont) echo '{"ready": true, "questions": [], "summary": "use Runna", "verdict": "dont"}' > "$WORK/status/$PHASE.json" ;;
   *) echo '{"ready": true, "questions": [], "summary": "done", "verdict": "build"}' > "$WORK/status/$PHASE.json" ;;

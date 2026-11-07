@@ -8,3 +8,7 @@ Define the product from the brief and the research.
 - **User stories** for the MVP (5-12), each with testable acceptance criteria.
 - **Non-goals** for v1, and **metrics**: what to measure, so analytics can be built in from the start.
 This document becomes docs/PRODUCT.md in the repo. Builders follow it literally, so be precise.
+
+Interview coverage topics: positioning, personas, business model and price, the MVP's must-haves (confirm each one),
+priorities between competing features, key flows' edge cases (no signal, missed days, data loss), metrics. Ask the owner
+to choose between concrete feature trade-offs rather than to list features.

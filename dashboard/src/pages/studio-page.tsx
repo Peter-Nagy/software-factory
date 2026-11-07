@@ -2,6 +2,7 @@ import { Archive, Check, Clock3, FlaskConical, Loader2, Lock, Maximize2, Minus, 
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { ChatPanel, useDocComments } from "@/components/chat-panel"
+import { Coverage, Interview } from "@/components/interview"
 import { Markdown } from "@/components/markdown"
 import { PlanView } from "@/components/plan-view"
 import { Button } from "@/components/ui/button"
@@ -106,12 +107,7 @@ function PhaseDoc({ studioId, phase, detail, docRef }: { studioId: number; phase
       </CardHeader>
       <CardContent ref={docRef} className="max-h-[calc(100dvh-14rem)] overflow-y-auto pt-4">
         {phase.phase === "research" && phase.status?.verdict && <Verdict verdict={phase.status.verdict} />}
-        {phase.status && phase.status.questions.length > 0 && (
-          <div className="mb-4 rounded-2xl bg-primary/8 p-3.5 text-sm ring-1 ring-primary/20">
-            <p className="mb-1 font-medium">Open questions</p>
-            <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground">{phase.status.questions.map((q) => <li key={q}>{q}</li>)}</ul>
-          </div>
-        )}
+        {phase.status && <Coverage topics={phase.status.coverage} />}
         {doc ? <div data-comment-source={`doc:${file}`}><Markdown text={doc} /></div> : <p className="text-sm text-muted-foreground">{phase.busy || phase.state === "thinking" ? "The agent is writing it…" : "Nothing written yet."}</p>}
         {phase.phase === "design" && detail.mockups.length > 0 && (
           <div className="mt-6">
@@ -184,6 +180,11 @@ export function StudioPage({ id }: { id: number }) {
   const thinking = phase.busy || phase.state === "thinking"
   const canApprove = ["drafting", "stale"].includes(phase.state) && !!data.docs[phase.phase] && !thinking && phase.phase !== "plan"
   const msgs = data.messages.filter((m) => m.phase === phase.phase)
+  const interviewing = !thinking && !!phase.status?.questions.length && ["ready", "drafting", "stale"].includes(phase.state)
+  const send = async (text: string) => {
+    await api("POST", `studios/${id}/messages`, { phase: phase.phase, text })
+    await reload()
+  }
   const startable = (phase.state === "ready" && msgs.length === 0) || phase.state === "stale"
 
   return (
@@ -237,6 +238,16 @@ export function StudioPage({ id }: { id: number }) {
       ) : phase.state === "locked" ? (
         <div className="rounded-3xl border border-dashed p-10 text-center text-sm text-muted-foreground">Approve the earlier steps first.</div>
       ) : (
+        <>
+        {interviewing && (
+          <Interview
+            key={phase.phase}
+            storageKey={`${id}:${phase.phase}`}
+            agent={`The ${phase.title.toLowerCase()} agent`}
+            questions={phase.status!.questions}
+            onSend={send}
+          />
+        )}
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
           <ChatPanel
             key={phase.phase}
@@ -251,13 +262,11 @@ export function StudioPage({ id }: { id: number }) {
             closed={phase.state === "skipped"}
             notes={comments.notes}
             setNotes={comments.setNotes}
-            onSend={async (text) => {
-              await api("POST", `studios/${id}/messages`, { phase: phase.phase, text })
-              await reload()
-            }}
+            onSend={send}
           />
           <PhaseDoc studioId={id} phase={phase} detail={data} docRef={docRef} />
         </div>
+        </>
       )}
       {comments.button}
     </div>

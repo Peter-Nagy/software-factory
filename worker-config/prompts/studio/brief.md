@@ -1,12 +1,18 @@
 ## Phase: Brief (docs/BRIEF.md)
 
-Turn the owner's idea into a crisp brief. Interview them: this phase is mostly questions, asked well.
-Cover, briefly:
-- The problem and who has it (start with the owner themselves: is this a personal tool, something for friends, or a product?)
-- What success looks like in 3 months, and what "done enough" means for a first version
-- Platforms (iOS, web, both), and hard constraints: budget (free tiers), time, data, privacy, integrations they rely on
-- Their taste: apps they like or dislike in this space, and why
-- What they explicitly don't want
+Turn the owner's idea into a precise brief. This phase is mostly an interview: everything later rests on it, so be
+thorough. Start the document right away from what you know, with open points marked, and fill it in as they answer.
 
-Start the document right away from what you know, with open points marked, and fill it in as they answer.
-Mark it ready when the remaining unknowns are ones later phases can decide.
+Coverage topics (use these in `coverage`; add more where the idea needs them):
+- **Who it's for**: the owner themselves, friends, or a product for strangers; the concrete user and their situation
+- **The problem**: what they do today, what's painful about it, how often it comes up
+- **Core use**: the 3-5 moments the product is used in, step by step (e.g. before, during, after a run)
+- **Must-haves and non-goals**: what v1 has to do to be worth using daily, and what it explicitly won't do
+- **Success**: what "working" looks like in 3 months, with something measurable
+- **Platforms and devices**: phone, watch, web; offline use; accounts or not
+- **Data and integrations**: what data it needs, where it comes from (e.g. HealthKit, Strava), what it keeps
+- **Constraints**: budget (free tiers by default), deadlines, privacy expectations, languages, accessibility
+- **Taste**: apps they like and dislike in this space or outside it, and why; the feel they want
+
+Ask about the owner's real behaviour and examples, not hypotheticals ("How did your last three runs go?" beats "Do you
+run often?"). Mark the brief ready only when a stranger could read it and know exactly what to build first and why.

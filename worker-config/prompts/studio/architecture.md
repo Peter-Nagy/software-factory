@@ -11,3 +11,7 @@ Design how it's built, from the product and design documents.
 - **Risky unknowns**: write /work/docs/spikes.json, a list of the questions that could sink the plan and that a small
   throwaway prototype can answer: `[{"key": "background-gps", "question": "...", "approach": "..."}]`. Use `[]` when
   there are none. Keep it to the 0-5 that matter.
+
+Interview coverage topics: accounts and sign-in, sync between devices, offline behaviour, data retention and export,
+third-party services and their accounts, analytics and crash reporting, notifications, budget limits. Ask only about
+choices with a visible effect for the owner (cost, privacy, features); decide pure engineering questions yourself.

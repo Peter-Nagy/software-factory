@@ -18,6 +18,8 @@ import {
   ensureStudioPlan,
   getStudio,
   phaseRow,
+  PhaseStatusSchema,
+  readStatus,
   recoverStudios,
   setStudioMode,
   startQueuedPhases,
@@ -142,7 +144,7 @@ test('studio, autopilot: done phases approve themselves under the governor and s
   approvePhase(s.ctx, st.id, 'research');
   assert.deepEqual(await run(), [`${st.id}:product`]);
   assert.equal(s.states(st.id).product, 'drafting');
-  assert.match(studioMessages(s.ctx, st.id, 'product').at(-1)!.text, /needs your answers/);
+  assert.match(studioMessages(s.ctx, st.id, 'product').at(-1)!.text, /has questions for you/);
 });
 
 test('studio: a restart puts interrupted phases back', () => {
@@ -228,3 +230,33 @@ test('studio over HTTP: create with a first message, read, approve; mockups are 
   }
 });
 
+
+test('studio interview: questions are structured, plain strings still work, and the mode is in every turn', async () => {
+  const parsed = PhaseStatusSchema.parse({
+    ready: false,
+    questions: [
+      'Describe your typical run',
+      { header: 'Platform', question: 'Which platforms?', options: ['iPhone', { label: 'Web', description: 'More work' }], recommended: 'iPhone' },
+    ],
+    coverage: [{ topic: 'Platforms', done: false }],
+  });
+  assert.deepEqual(parsed.questions[0], { question: 'Describe your typical run', header: '', why: '', options: [], multiSelect: false, recommended: null });
+  assert.deepEqual(parsed.questions[1]!.options, [{ label: 'iPhone', description: '' }, { label: 'Web', description: 'More work' }]);
+  assert.equal(parsed.questions[1]!.recommended, 'iPhone');
+  assert.equal(PhaseStatusSchema.safeParse({ ready: true, questions: Array.from({ length: 16 }, () => 'q?') }).success, false);
+
+  const { ctx, mode } = setup();
+  const st = createStudio(ctx, { title: 'Run', mode: 'guided' });
+  const prompt = () => readFileSync(join(studioWork(ctx, st.id), '..', 'args-brief'), 'utf8');
+  mode(st.id, 'brief', 'interview');
+  await studioTurn(ctx, st.id, 'brief', 'I want a running app');
+  const status = readStatus(ctx, st.id, 'brief')!;
+  assert.equal(status.questions.length, 2);
+  assert.equal(status.questions[0]!.options.length, 2);
+  assert.deepEqual(status.coverage.map((c) => c.done), [true, false]);
+  assert.match(prompt(), /Mode: guided/);
+  setStudioMode(ctx, st.id, 'autopilot');
+  setStudioMode(ctx, st.id, 'guided');
+  await studioTurn(ctx, st.id, 'brief', 'Answers to your questions:\n\n> Which platforms?\nYour call');
+  assert.match(prompt(), /Mode: guided[\s\S]*Answers to your questions/);
+});
